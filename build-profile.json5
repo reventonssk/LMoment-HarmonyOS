@@ -1,0 +1,56 @@
+{
+  app: {
+    signingConfigs: [
+      {
+        name: 'default',
+        type: 'HarmonyOS',
+        material: {
+          certpath: 'C:\\Users\\reven\\.ohos\\config\\default_LMoment_9a7oA3FyoRqlofHJklX2fDQUqCT080JqZSVJxr0=.cer',
+          keyAlias: 'debugKey',
+          keyPassword: '0000001be9181b9c9bd7dc0cbc1a1193e84f7064365f7dea4bd985ccd1e3cd1062f8ba5f37c8a7544f1d5a',
+          profile: 'C:\\Users\\reven\\.ohos\\config\\default_LMoment_9a7oA3FyoRqlofHJklX2fDQUqCT080JqZSVJxr0=.p7b',
+          signAlg: 'SHA256withECDSA',
+          storeFile: 'C:\\Users\\reven\\.ohos\\config\\default_LMoment_9a7oA3FyoRqlofHJklX2fDQUqCT080JqZSVJxr0=.p12',
+          storePassword: '0000001be9181b9c9bd7dc0cbc1a1193e84f7064365f7dea4bd985ccd1e3cd1062f8ba5f37c8a7544f1d5a',
+        },
+      },
+    ],
+    products: [
+      {
+        name: 'default',
+        signingConfig: 'default',
+        targetSdkVersion: '26.0.0',
+        compatibleSdkVersion: '26.0.0',
+        runtimeOS: 'HarmonyOS',
+        buildOption: {
+          strictMode: {
+            caseSensitiveCheck: true,
+            useNormalizedOHMUrl: true,
+          },
+        },
+      },
+    ],
+    buildModeSet: [
+      {
+        name: 'debug',
+      },
+      {
+        name: 'release',
+      },
+    ],
+  },
+  modules: [
+    {
+      name: 'entry',
+      srcPath: './entry',
+      targets: [
+        {
+          name: 'default',
+          applyToProducts: [
+            'default',
+          ],
+        },
+      ],
+    },
+  ],
+}
