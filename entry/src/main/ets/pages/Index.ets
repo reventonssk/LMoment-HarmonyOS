@@ -17,6 +17,7 @@ import { ColorCode, CodePayload } from '../engine/ColorCode';
 import { ImagePipeline, DecodedImage } from '../engine/ImagePipeline';
 import { StyleRunner } from '../engine/ExportTask';
 import { NeuralEngine } from '../engine/NeuralEngine';
+import { SettingsStore } from '../engine/SettingsStore';
 
 class ThumbEntry {
   readonly key: string;
@@ -91,9 +92,14 @@ struct Index {
     this.loadCustoms();
     const c = this.ctx();
     if (c !== undefined) {
+      SettingsStore.init(c);
       NeuralEngine.init(c.resourceManager);
       NeuralEngine.preload();
     }
+    // 冷启动分类：固定值直接用，「记忆上次」取 last，无效回落 L-Moment（与原版一致）
+    const start = SettingsStore.startCategory();
+    this.currentCategory = start;
+    SettingsStore.setLastCategory(start);
   }
 
   private ctx(): common.Context | undefined {
@@ -429,7 +435,12 @@ struct Index {
       return;
     }
     this.currentCategory = id;
+    SettingsStore.setLastCategory(id);
     this.rebuildThumbs();
+  }
+
+  private openSettings(): void {
+    this.getUIContext().getRouter().pushUrl({ url: 'pages/SettingsPage' });
   }
 
   private selectStyle(key: string): void {
@@ -952,6 +963,13 @@ struct Index {
                 this.pickAndLoad();
               })
           }
+          Text('设置')
+            .fontSize(13)
+            .fontColor('#E8B84B')
+            .padding({ left: 14 })
+            .onClick(() => {
+              this.openSettings();
+            })
         }
         .width('100%')
         .height(52)
