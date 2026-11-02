@@ -257,6 +257,11 @@ struct SettingsPage {
               this.toggleHdrDefault();
             })
           this.dividerLine()
+          this.srow('超分档位', '主界面入口',
+            '主界面标题栏：超分快 / 超分质；导出时按当前档位放大 2×', '', true, () => {
+              this.getUIContext().getPromptAction().showToast({ message: '请在主界面标题栏切换超分档位' });
+            })
+          this.dividerLine()
           this.srow('徕卡徽章', SettingsStore.leicaBadgeEnabled() ? '开' : '关',
             '导出写入徕卡识别元数据（默认开）', '后续批次启用', false, () => {
             })

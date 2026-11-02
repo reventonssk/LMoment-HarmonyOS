@@ -19,6 +19,7 @@ import { StyleRunner } from '../engine/ExportTask';
 import { NeuralEngine } from '../engine/NeuralEngine';
 import { SettingsStore } from '../engine/SettingsStore';
 import { HdrGainMap } from '../engine/HdrGainMap';
+import { SuperResEngine, SuperResMode } from '../engine/SuperResEngine';
 
 class ThumbEntry {
   readonly key: string;
@@ -63,6 +64,8 @@ struct Index {
   @State notice: string = '';
   @State thumbEntries: ThumbEntry[] = [];
   @State hdrEnabled: boolean = false;
+  @State superResMode: SuperResMode = SuperResMode.FAST;
+  @State superResEnabled: boolean = false;
 
   private origBuf: Uint8Array = new Uint8Array(0);
   private origW: number = 0;
@@ -97,6 +100,7 @@ struct Index {
       SettingsStore.init(c);
       NeuralEngine.init(c.resourceManager);
       NeuralEngine.preload();
+      SuperResEngine.init(c.resourceManager);
     }
     // 冷启动分类：固定值直接用，「记忆上次」取 last，无效回落 L-Moment（与原版一致）
     const start = SettingsStore.startCategory();
@@ -694,6 +698,16 @@ struct Index {
             lutBin, saBin, this.levels);
         }
       }
+      if (this.superResEnabled) {
+        const upscaled = await SuperResEngine.upscale(out, w, h, this.superResMode);
+        if (upscaled !== undefined) {
+          out = upscaled.data;
+          w = upscaled.width;
+          h = upscaled.height;
+        } else {
+          this.toast('当前图像较大，超分已降级为普通导出');
+        }
+      }
       const pm = await ImagePipeline.rgbaToPixelMap(out, w, h);
       const jpeg = await ImagePipeline.packJpeg(pm, 95);
       let finalJpeg: Uint8Array = jpeg;
@@ -986,6 +1000,20 @@ struct Index {
                 this.hdrEnabled = !this.hdrEnabled;
                 SettingsStore.setHdrDefaultOn(this.hdrEnabled);
                 this.renderTone();
+              })
+            Text(this.superResEnabled ? (this.superResMode === SuperResMode.FAST ? '超分快' : '超分质') : '超分')
+              .fontSize(13)
+              .fontColor(this.superResEnabled ? '#F2E6C9' : '#E8B84B')
+              .padding({ left: 14 })
+              .onClick(() => {
+                if (!this.superResEnabled) {
+                  this.superResEnabled = true;
+                  this.superResMode = SuperResMode.FAST;
+                } else if (this.superResMode === SuperResMode.FAST) {
+                  this.superResMode = SuperResMode.QUALITY;
+                } else {
+                  this.superResEnabled = false;
+                }
               })
           }
           Text('设置')
