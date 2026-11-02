@@ -18,6 +18,7 @@ import { ImagePipeline, DecodedImage } from '../engine/ImagePipeline';
 import { StyleRunner } from '../engine/ExportTask';
 import { NeuralEngine } from '../engine/NeuralEngine';
 import { SettingsStore } from '../engine/SettingsStore';
+import { HdrGainMap } from '../engine/HdrGainMap';
 
 class ThumbEntry {
   readonly key: string;
@@ -61,6 +62,7 @@ struct Index {
   @State importText: string = '';
   @State notice: string = '';
   @State thumbEntries: ThumbEntry[] = [];
+  @State hdrEnabled: boolean = false;
 
   private origBuf: Uint8Array = new Uint8Array(0);
   private origW: number = 0;
@@ -100,6 +102,7 @@ struct Index {
     const start = SettingsStore.startCategory();
     this.currentCategory = start;
     SettingsStore.setLastCategory(start);
+    this.hdrEnabled = SettingsStore.hdrDefaultOn();
   }
 
   private ctx(): common.Context | undefined {
@@ -347,6 +350,7 @@ struct Index {
     }
     this.showAdjust = false;
     this.comparing = false;
+    this.hdrEnabled = SettingsStore.hdrDefaultOn();
     this.origBuf = d.data;
     this.origW = d.width;
     this.origH = d.height;
@@ -552,6 +556,9 @@ struct Index {
       px = await StyleRunner.run(this.styledBuf, this.origW, this.origH,
         StyleMode.MODEL_PASSTHROUGH, 0, 0, false, undefined, undefined, this.levels);
     }
+    if (this.hdrEnabled) {
+      px = HdrGainMap.applyPreview(px, this.origW, this.origH, SettingsStore.hdrBoostLevel());
+    }
     if (seq !== this.renderSeq) {
       return;
     }
@@ -689,7 +696,16 @@ struct Index {
       }
       const pm = await ImagePipeline.rgbaToPixelMap(out, w, h);
       const jpeg = await ImagePipeline.packJpeg(pm, 95);
-      await ImagePipeline.writeToGallery(target, jpeg);
+      let finalJpeg: Uint8Array = jpeg;
+      if (this.hdrEnabled) {
+        const hdr = await HdrGainMap.synthFromRgba(out, w, h, SettingsStore.hdrBoostLevel());
+        if (hdr !== undefined) {
+          finalJpeg = HdrGainMap.embed(jpeg, hdr);
+        }
+      } else {
+        finalJpeg = HdrGainMap.truncateToPrimary(jpeg);
+      }
+      await ImagePipeline.writeToGallery(target, finalJpeg);
       pm.release().catch(() => {
       });
       this.toast('已保存到图库');
@@ -961,6 +977,15 @@ struct Index {
               .padding({ left: 14 })
               .onClick(() => {
                 this.pickAndLoad();
+              })
+            Text(this.hdrEnabled ? 'HDR开' : 'HDR')
+              .fontSize(13)
+              .fontColor(this.hdrEnabled ? '#F2E6C9' : '#E8B84B')
+              .padding({ left: 14 })
+              .onClick(() => {
+                this.hdrEnabled = !this.hdrEnabled;
+                SettingsStore.setHdrDefaultOn(this.hdrEnabled);
+                this.renderTone();
               })
           }
           Text('设置')

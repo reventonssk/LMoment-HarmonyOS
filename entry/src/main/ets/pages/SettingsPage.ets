@@ -119,6 +119,28 @@ struct SettingsPage {
     });
   }
 
+  private pickHdrBoost(): void {
+    const light: SheetInfo = { title: '轻（1.5EV）', action: () => {
+      SettingsStore.setHdrBoostLevel(0);
+    } };
+    const standard: SheetInfo = { title: '标准（2.0EV）', action: () => {
+      SettingsStore.setHdrBoostLevel(1);
+    } };
+    const strong: SheetInfo = { title: '强（2.5EV）', action: () => {
+      SettingsStore.setHdrBoostLevel(2);
+    } };
+    this.getUIContext().showActionSheet({
+      title: 'HDR 强度',
+      message: '选择增益图幅度',
+      sheets: [light, standard, strong]
+    });
+  }
+
+  private toggleHdrDefault(): void {
+    SettingsStore.setHdrDefaultOn(!SettingsStore.hdrDefaultOn());
+    this.refresh();
+  }
+
   @Builder
   private srow(title: string, value: string, hint: string, tag: string, enabled: boolean,
     tap: () => void) {
@@ -226,11 +248,13 @@ struct SettingsPage {
             })
           this.dividerLine()
           this.srow('HDR 强度', SettingsStore.hdrBoostLevelName(SettingsStore.hdrBoostLevel()),
-            'HDR 增益图幅度：轻 1.5EV / 标准 2.0EV / 强 2.5EV', '后续批次启用', false, () => {
+            'HDR 增益图幅度：轻 1.5EV / 标准 2.0EV / 强 2.5EV', '', true, () => {
+              this.pickHdrBoost();
             })
           this.dividerLine()
           this.srow('HDR 默认开', SettingsStore.hdrDefaultOn() ? '开' : '关',
-            '导入普通图片时 HDR 按钮的默认状态（默认关）', '后续批次启用', false, () => {
+            '导入普通图片时 HDR 按钮的默认状态（默认关）', '', true, () => {
+              this.toggleHdrDefault();
             })
           this.dividerLine()
           this.srow('徕卡徽章', SettingsStore.leicaBadgeEnabled() ? '开' : '关',
