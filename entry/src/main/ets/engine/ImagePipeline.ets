@@ -27,7 +27,7 @@ export class DecodedImage {
 
 export class ImagePipeline {
   /** 预览最长边（对齐 Android scaleBitmap(base, 1600)）。 */
-  static readonly PREVIEW_EDGE = 1600;
+  static readonly PREVIEW_EDGE = 1024;
   /** 缩略图最长边。 */
   static readonly THUMB_EDGE = 128;
   /** 导出工作上限：长边 ≤ 4096、短边 ≤ 3072（对齐 Android MAX_WORK_*）。 */
@@ -145,14 +145,14 @@ export class ImagePipeline {
     await pm.readPixelsToBuffer(raw);
     const src = new Uint8Array(raw);
     const tight = new Uint8Array(w * h * 4);
-    const stride = info.stride;
-    if (stride === w * 4) {
-      tight.set(src);
-    } else {
-      const rowBytes = w * 4;
-      for (let y = 0; y < h; y++) {
-        tight.set(src.subarray(y * stride, y * stride + rowBytes), y * rowBytes);
-      }
+    const rowBytes = w * 4;
+    const stride = pm.getBytesNumberPerRow();
+    if (stride < rowBytes || src.byteLength < stride * h) {
+      throw new Error('invalid pixel row stride');
+    }
+    for (let y = 0; y < h; y++) {
+      const from = y * stride;
+      tight.set(src.subarray(from, from + rowBytes), y * rowBytes);
     }
     return new DecodedImage(pm, w, h, tight);
   }

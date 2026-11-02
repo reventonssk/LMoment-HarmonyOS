@@ -407,21 +407,7 @@ struct Index {
     const defs = this.stylesForCategory(this.currentCategory);
     for (let i = 0; i < defs.length; i++) {
       const def = defs[i];
-      const px = this.thumbBuf.slice();
-      let lut: Lut3D | undefined = undefined;
-      if (def.mode === StyleMode.LUT) {
-        lut = await this.lutFor(def.lutFile);
-      }
-      let sa: StyleAModel | undefined = undefined;
-      if (def.mode === StyleMode.SA) {
-        sa = await this.saModel();
-      }
-      if (NeuralEngine.isNeuralMode(def.mode)) {
-        await NeuralEngine.applyNeural(px, tw, th, def.mode);
-      } else {
-        StyleEngine.apply(px, tw, th, def, lut, sa);
-      }
-      entries.push(new ThumbEntry(def.id, def.label, await this.thumbPmOf(px), ''));
+      entries.push(new ThumbEntry(def.id, def.label, await this.thumbPmOf(this.thumbBuf), ''));
     }
     if (this.currentCategory === 'custom') {
       for (let i = 0; i < this.customs.length; i++) {
@@ -981,45 +967,48 @@ struct Index {
             .fontWeight(FontWeight.Bold)
             .fontColor('#F2E6C9')
           Blank()
-          if (this.hasImage) {
-            Text(this.selectedKey === '' ? '原图' : (this.findCustomOrDefLabel()))
-              .fontSize(12)
-              .fontColor('#8A8A8A')
-            Text('换图')
-              .fontSize(13)
-              .fontColor('#E8B84B')
-              .padding({ left: 14 })
-              .onClick(() => {
-                this.pickAndLoad();
-              })
-            Text(this.hdrEnabled ? 'HDR开' : 'HDR')
-              .fontSize(13)
-              .fontColor(this.hdrEnabled ? '#F2E6C9' : '#E8B84B')
-              .padding({ left: 14 })
-              .onClick(() => {
-                this.hdrEnabled = !this.hdrEnabled;
-                SettingsStore.setHdrDefaultOn(this.hdrEnabled);
-                this.renderTone();
-              })
-            Text(this.superResEnabled ? (this.superResMode === SuperResMode.FAST ? '超分快' : '超分质') : '超分')
-              .fontSize(13)
-              .fontColor(this.superResEnabled ? '#F2E6C9' : '#E8B84B')
-              .padding({ left: 14 })
-              .onClick(() => {
-                if (!this.superResEnabled) {
-                  this.superResEnabled = true;
-                  this.superResMode = SuperResMode.FAST;
-                } else if (this.superResMode === SuperResMode.FAST) {
-                  this.superResMode = SuperResMode.QUALITY;
-                } else {
-                  this.superResEnabled = false;
-                }
-              })
+          Scroll() {
+            Row({ space: 12 }) {
+              if (this.hasImage) {
+                Text(this.selectedKey === '' ? '原图' : (this.findCustomOrDefLabel()))
+                  .fontSize(12)
+                  .fontColor('#8A8A8A')
+                Text('换图')
+                  .fontSize(13)
+                  .fontColor('#E8B84B')
+                  .onClick(() => {
+                    this.pickAndLoad();
+                  })
+                Text(this.hdrEnabled ? 'HDR开' : 'HDR')
+                  .fontSize(13)
+                  .fontColor(this.hdrEnabled ? '#F2E6C9' : '#E8B84B')
+                  .onClick(() => {
+                    this.hdrEnabled = !this.hdrEnabled;
+                    SettingsStore.setHdrDefaultOn(this.hdrEnabled);
+                    this.renderTone();
+                  })
+                Text(this.superResEnabled ? (this.superResMode === SuperResMode.FAST ? '超分快' : '超分质') : '超分')
+                  .fontSize(13)
+                  .fontColor(this.superResEnabled ? '#F2E6C9' : '#E8B84B')
+                  .onClick(() => {
+                    if (!this.superResEnabled) {
+                      this.superResEnabled = true;
+                      this.superResMode = SuperResMode.FAST;
+                    } else if (this.superResMode === SuperResMode.FAST) {
+                      this.superResMode = SuperResMode.QUALITY;
+                    } else {
+                      this.superResEnabled = false;
+                    }
+                  })
+              }
+            }
           }
+          .scrollable(ScrollDirection.Horizontal)
+          .scrollBar(BarState.Off)
+          .constraintSize({ minWidth: 0, maxWidth: '72%' })
           Text('设置')
             .fontSize(13)
             .fontColor('#E8B84B')
-            .padding({ left: 14 })
             .onClick(() => {
               this.openSettings();
             })
