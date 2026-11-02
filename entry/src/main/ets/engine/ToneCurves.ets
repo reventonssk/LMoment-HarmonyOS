@@ -3,19 +3,23 @@
  *
  * 七档参数（-10..10）：亮度/曝光/高光/阴影/黑色阶/饱和度/对比度，
  * 参数域合成一条 4096 级亮度曲线，色相保护（Y'/Y 缩放）+ 保亮度软限 + TPDF 抖动。
- * levels 数组顺序：[brightness, exposure, highlights, shadows, black, saturation, contrast]。
+ * levels 数组顺序：[brightness, exposure, highlights, shadows, black, saturation, contrast, glow]。
+ * 第八档柔光（glow）为空间算子，由 SoftGlow 在本引擎之后叠加；isNeutral 仅判定前七档。
  */
 
 export class ToneCurves {
   static readonly MIN_LEVEL: number = -10;
   static readonly MAX_LEVEL: number = 10;
+  /** 色调档数（levels 前七项；levels[TONE_COUNT] 为柔光，不属本引擎）。 */
+  static readonly TONE_COUNT: number = 7;
   private static readonly LUT_N: number = 4096;
   private static s2l: Float64Array = new Float64Array(256);
   private static l2sTab: Float64Array = new Float64Array(1025);
   private static built: boolean = false;
 
   static isNeutral(levels: number[]): boolean {
-    for (let i = 0; i < levels.length; i++) {
+    const n = Math.min(levels.length, ToneCurves.TONE_COUNT);
+    for (let i = 0; i < n; i++) {
       if (levels[i] !== 0) {
         return false;
       }

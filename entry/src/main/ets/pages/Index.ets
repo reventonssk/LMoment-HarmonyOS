@@ -1,6 +1,7 @@
 /**
- * L-Moment 主界面：预览（长按对比原图）/ 分类 / 风格卡 / 七档色调滑杆 /
- * 导入·分享码 / SaveButton 导出。神经链风格经 MindSpore 推理，模型缺失时逐级降级并提示。
+ * L-Moment 主界面：预览（长按对比原图）/ 分类 / 风格卡 / 八档调整滑杆（含柔光，双击行归零）/
+ * 导入·分享码 / 拍照（cameraPicker）/ SaveButton 导出。神经链风格经 MindSpore 推理，
+ * 模型缺失时逐级降级并提示。
  */
 
 import { common } from '@kit.AbilityKit';
@@ -53,7 +54,7 @@ struct Index {
   @State exporting: boolean = false;
   @State currentCategory: string = 'all';
   @State selectedKey: string = '';
-  @State levels: number[] = [0, 0, 0, 0, 0, 0, 0];
+  @State levels: number[] = [0, 0, 0, 0, 0, 0, 0, 0];
   @State showAdjust: boolean = false;
   @State showImport: boolean = false;
   @State importText: string = '';
@@ -79,6 +80,12 @@ struct Index {
   private customs: CustomEntry[] = [];
   private renderSeq: number = 0;
   private toneTimer: number = -1;
+  private tapIdx: number = -1;
+  private tapTs: number = 0;
+  private downX: number = 0;
+  private downY: number = 0;
+  private zeroGuardIdx: number = -1;
+  private zeroGuardTs: number = 0;
 
   aboutToAppear(): void {
     this.loadCustoms();
@@ -278,6 +285,22 @@ struct Index {
     }
   }
 
+  private async takeAndLoad(): Promise<void> {
+    const c = this.ctx();
+    if (c === undefined) {
+      return;
+    }
+    try {
+      const uri = await ImagePipeline.takePhoto(c);
+      if (uri === '') {
+        return;
+      }
+      await this.loadFromUri(uri);
+    } catch (e) {
+      this.toast('拍照不可用');
+    }
+  }
+
   private async loadFromUri(uri: string): Promise<void> {
     this.processing = true;
     const d = await ImagePipeline.decodeUri(uri, ImagePipeline.PREVIEW_EDGE);
@@ -308,6 +331,16 @@ struct Index {
   }
 
   private async applyDecoded(d: DecodedImage): Promise<void> {
+    // 新图：八档调整归零、收起面板、取消挂起的重绘（与 Android 换图重置口径一致）
+    for (let i = 0; i < this.levels.length; i++) {
+      this.levels[i] = 0;
+    }
+    if (this.toneTimer >= 0) {
+      clearTimeout(this.toneTimer);
+      this.toneTimer = -1;
+    }
+    this.showAdjust = false;
+    this.comparing = false;
     this.origBuf = d.data;
     this.origW = d.width;
     this.origH = d.height;
@@ -430,7 +463,7 @@ struct Index {
     }
     this.processing = true;
     try {
-      const neutral: number[] = [0, 0, 0, 0, 0, 0, 0];
+      const neutral: number[] = [0, 0, 0, 0, 0, 0, 0, 0];
       let styled: Uint8Array | undefined = undefined;
       let notice = '';
       if (key === '') {
@@ -502,7 +535,9 @@ struct Index {
     }
     const seq = ++this.renderSeq;
     let px = this.styledBuf;
-    if (!ToneCurves.isNeutral(this.levels)) {
+    const glowSet = this.levels.length > ToneCurves.TONE_COUNT &&
+      this.levels[ToneCurves.TONE_COUNT] !== 0;
+    if (!ToneCurves.isNeutral(this.levels) || glowSet) {
       px = await StyleRunner.run(this.styledBuf, this.origW, this.origH,
         StyleMode.MODEL_PASSTHROUGH, 0, 0, false, undefined, undefined, this.levels);
     }
@@ -522,6 +557,11 @@ struct Index {
   }
 
   private onSlider(idx: number, value: number): void {
+    // 双击归零后 ~300ms 内到达的跳变回声（Slider 点按跳转动画结束才提交 onChange），
+    // 会把刚归零的档位改回跳变值，吞掉。
+    if (value !== 0 && idx === this.zeroGuardIdx && Date.now() - this.zeroGuardTs < 450) {
+      return;
+    }
     this.levels[idx] = Math.round(value);
     if (this.toneTimer >= 0) {
       clearTimeout(this.toneTimer);
@@ -530,6 +570,21 @@ struct Index {
       this.toneTimer = -1;
       this.renderTone();
     }, 120);
+  }
+
+  /** 双击滑杆行归零（与 Android 双击 SeekBar 归零一致）。 */
+  private zeroSlider(idx: number): void {
+    if (this.levels[idx] === 0) {
+      return;
+    }
+    this.levels[idx] = 0;
+    this.zeroGuardIdx = idx;
+    this.zeroGuardTs = Date.now();
+    if (this.toneTimer >= 0) {
+      clearTimeout(this.toneTimer);
+      this.toneTimer = -1;
+    }
+    this.renderTone();
   }
 
   private resetLevels(): void {
@@ -600,7 +655,9 @@ struct Index {
         if (NeuralEngine.isNeuralMode(def.mode)) {
           const px = src.slice();
           await NeuralEngine.applyNeural(px, w, h, def.mode);
-          if (ToneCurves.isNeutral(this.levels)) {
+          const glowSet = this.levels.length > ToneCurves.TONE_COUNT &&
+            this.levels[ToneCurves.TONE_COUNT] !== 0;
+          if (ToneCurves.isNeutral(this.levels) && !glowSet) {
             out = px;
           } else {
             out = await StyleRunner.run(px, w, h, StyleMode.MODEL_PASSTHROUGH,
@@ -796,6 +853,35 @@ struct Index {
     }
     .width('100%')
     .height(34)
+    .onTouch((event: TouchEvent) => {
+      // 双击行归零：onTouch 被动观测，不参与手势仲裁（Slider 原生点按跳转/拖动不受影响）
+      if (event.type === TouchType.Down) {
+        const d = event.changedTouches[0];
+        if (d !== undefined) {
+          this.downX = d.x;
+          this.downY = d.y;
+        }
+      } else if (event.type === TouchType.Up) {
+        const u = event.changedTouches[0];
+        if (u === undefined) {
+          return;
+        }
+        const dx = u.x - this.downX;
+        const dy = u.y - this.downY;
+        if (dx * dx + dy * dy > 100) {
+          return;
+        }
+        const now = Date.now();
+        if (this.tapIdx === idx && now - this.tapTs < 320) {
+          this.tapIdx = -1;
+          this.tapTs = 0;
+          this.zeroSlider(idx);
+        } else {
+          this.tapIdx = idx;
+          this.tapTs = now;
+        }
+      }
+    })
   }
 
   @Builder
@@ -858,6 +944,13 @@ struct Index {
             Text(this.selectedKey === '' ? '原图' : (this.findCustomOrDefLabel()))
               .fontSize(12)
               .fontColor('#8A8A8A')
+            Text('换图')
+              .fontSize(13)
+              .fontColor('#E8B84B')
+              .padding({ left: 14 })
+              .onClick(() => {
+                this.pickAndLoad();
+              })
           }
         }
         .width('100%')
@@ -877,6 +970,14 @@ struct Index {
                 .fontSize(15)
                 .onClick(() => {
                   this.pickAndLoad();
+                })
+              Button('拍照')
+                .width(190)
+                .backgroundColor('#26262A')
+                .fontColor('#E8B84B')
+                .fontSize(15)
+                .onClick(() => {
+                  this.takeAndLoad();
                 })
               Button('生成测试图')
                 .width(190)
@@ -1026,6 +1127,7 @@ struct Index {
             this.sliderRow('黑阶', 4)
             this.sliderRow('饱和', 5)
             this.sliderRow('对比', 6)
+            this.sliderRow('柔光', 7)
           }
           .width('100%')
           .padding({ left: 20, right: 20, top: 4, bottom: 8 })

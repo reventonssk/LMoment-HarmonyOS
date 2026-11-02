@@ -1,8 +1,9 @@
 /**
- * taskpool 工作任务：风格链 + 色调曲线的纯数学处理（无 UI / image / zlib 依赖）。
+ * taskpool 工作任务：风格链 + 色调曲线 + 柔光的纯数学处理（无 UI / image / zlib 依赖）。
  *
  * 参数全部为可序列化对象（ArrayBuffer/number/boolean/number[]）；
  * LUT / SA 二进制用空 ArrayBuffer 表示「无」。失败抛 Error，由调用方 toast。
+ * levels[7]（柔光）为空间算子，在 ToneCurves 之后按 8-bit 域叠加（与 Android 同口径）。
  */
 
 import { taskpool } from '@kit.ArkTS';
@@ -10,6 +11,7 @@ import { Lut3D } from './Lut3D';
 import { StyleEngine } from './StyleEngine';
 import { StyleAModel } from './StyleAEngine';
 import { ToneCurves } from './ToneCurves';
+import { SoftGlow } from './SoftGlow';
 import { StyleMode } from './StyleDefs';
 
 @Concurrent
@@ -33,6 +35,9 @@ export function runStyleTask(rgba: ArrayBuffer, w: number, h: number, mode: Styl
   }
   StyleEngine.applyPx(px, w, h, mode, grain, vignette, p9, lut, sa);
   ToneCurves.apply(px, levels);
+  if (levels.length > ToneCurves.TONE_COUNT) {
+    SoftGlow.apply(px, w, h, levels[ToneCurves.TONE_COUNT]);
+  }
   return rgba;
 }
 

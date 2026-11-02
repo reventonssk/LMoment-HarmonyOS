@@ -7,6 +7,7 @@
 import { image } from '@kit.ImageKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
+import { cameraPicker, camera } from '@kit.CameraKit';
 import { common } from '@kit.AbilityKit';
 
 export class DecodedImage {
@@ -234,6 +235,23 @@ export class ImagePipeline {
       return res.photoUris[0];
     }
     return '';
+  }
+
+  /** 系统相机拍照（cameraPicker 免相机权限，照片入公共媒体库），返回 URI；取消/不可用返回 ''。 */
+  static async takePhoto(context: common.Context): Promise<string> {
+    try {
+      const profile: cameraPicker.PickerProfile = {
+        cameraPosition: camera.CameraPosition.CAMERA_POSITION_BACK
+      };
+      const res: cameraPicker.PickerResult = await cameraPicker.pick(context,
+        [cameraPicker.PickerMediaType.PHOTO], profile);
+      if (res.resultCode === 0 && res.resultUri !== undefined && res.resultUri !== '') {
+        return res.resultUri;
+      }
+      return '';
+    } catch (e) {
+      return '';
+    }
   }
 
   /** 合成测试图（渐变 + 色块 + 灰阶，供模拟器无图库内容时闭环验证）。 */
