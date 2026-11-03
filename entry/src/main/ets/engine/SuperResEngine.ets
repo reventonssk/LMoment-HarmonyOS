@@ -1,5 +1,6 @@
 import { mindSporeLite } from '@kit.MindSporeLiteKit';
 import { resourceManager } from '@kit.LocalizationKit';
+import { yieldUI } from './PixAsync';
 
 export enum SuperResMode {
   FAST = 0,
@@ -34,7 +35,7 @@ export class SuperResEngine {
   static readonly TILE: number = 256;
   static readonly OVERLAP: number = 16;
   static readonly SCALE: number = 2;
-  static readonly MAX_UI_PIXELS: number = 512 * 512;
+  static readonly MAX_SAFE_INPUT_PIXELS: number = 512 * 512;
   private static readonly models: Map<string, mindSporeLite.Model> = new Map();
   private static rm: resourceManager.ResourceManager | undefined = undefined;
 
@@ -47,19 +48,19 @@ export class SuperResEngine {
     if (width < 1 || height < 1 || src.length < width * height * 4) {
       return undefined;
     }
-    if (width * height > SuperResEngine.MAX_UI_PIXELS) {
+    if (width * height > SuperResEngine.MAX_SAFE_INPUT_PIXELS) {
       return undefined;
     }
     const name: string = mode === SuperResMode.QUALITY ? 'swinir_s_x2' : 'fast_span_x2';
     const model: mindSporeLite.Model = await SuperResEngine.ensureModel(name);
     const ow: number = width * SuperResEngine.SCALE;
     const oh: number = height * SuperResEngine.SCALE;
-    const sum: Float32Array = new Float32Array(ow * oh * 3);
-    const weight: Float32Array = new Float32Array(ow * oh);
+    const result: Uint8Array = new Uint8Array(ow * oh * 4);
     const xs: number[] = SuperResEngine.offsets(width);
     const ys: number[] = SuperResEngine.offsets(height);
     for (let yi = 0; yi < ys.length; yi++) {
       for (let xi = 0; xi < xs.length; xi++) {
+        await yieldUI();
         const tile: Float32Array = SuperResEngine.readTile(src, width, height, xs[xi], ys[yi]);
         const feeds: SuperResFeed[] = [];
         const input = model.getInputs();
@@ -72,21 +73,14 @@ export class SuperResEngine {
           feeds.push(new SuperResFeed(input[1].name, [1024, 64, 64], mask));
         }
         const outputs = await SuperResEngine.predict(model, feeds);
+        await yieldUI();
         if (outputs.length < 1) {
           return undefined;
         }
         const out = new Float32Array(outputs[0].getData());
         const outHwc: boolean = outputs[0].shape.length === 4 && outputs[0].shape[3] === 3;
-        SuperResEngine.accumulate(out, outHwc, xs[xi] * 2, ys[yi] * 2, ow, oh, sum, weight);
+        SuperResEngine.writeCenter(out, outHwc, xs[xi], ys[yi], width, height, ow, oh, result);
       }
-    }
-    const result: Uint8Array = new Uint8Array(ow * oh * 4);
-    for (let i = 0; i < ow * oh; i++) {
-      const w: number = weight[i] > 0 ? weight[i] : 1;
-      result[i * 4] = SuperResEngine.byte(sum[i * 3] / w);
-      result[i * 4 + 1] = SuperResEngine.byte(sum[i * 3 + 1] / w);
-      result[i * 4 + 2] = SuperResEngine.byte(sum[i * 3 + 2] / w);
-      result[i * 4 + 3] = 255;
     }
     return new SuperResImage(result, ow, oh);
   }
@@ -194,16 +188,23 @@ export class SuperResEngine {
     return out;
   }
 
-  private static accumulate(out: Float32Array, hwc: boolean, x0: number, y0: number,
-    width: number, height: number, sum: Float32Array, weight: Float32Array): void {
+  private static writeCenter(out: Float32Array, hwc: boolean, inputX: number, inputY: number,
+    inputWidth: number, inputHeight: number, width: number, height: number, result: Uint8Array): void {
     const tileOut: number = SuperResEngine.TILE * 2;
-    for (let y = 0; y < tileOut; y++) {
-      const oy: number = y0 + y;
+    const crop: number = SuperResEngine.OVERLAP * 2;
+    const startX: number = inputX > 0 ? crop : 0;
+    const startY: number = inputY > 0 ? crop : 0;
+    const endX: number = inputX + SuperResEngine.TILE < inputWidth ? tileOut - crop : tileOut;
+    const endY: number = inputY + SuperResEngine.TILE < inputHeight ? tileOut - crop : tileOut;
+    const outputX: number = inputX * 2;
+    const outputY: number = inputY * 2;
+    for (let y = startY; y < endY; y++) {
+      const oy: number = outputY + y;
       if (oy >= height) {
         continue;
       }
-      for (let x = 0; x < tileOut; x++) {
-        const ox: number = x0 + x;
+      for (let x = startX; x < endX; x++) {
+        const ox: number = outputX + x;
         if (ox >= width) {
           continue;
         }
@@ -213,10 +214,10 @@ export class SuperResEngine {
         const r: number = hwc ? out[srcPixel * 3] : out[srcPixel];
         const g: number = hwc ? out[srcPixel * 3 + 1] : out[plane + srcPixel];
         const b: number = hwc ? out[srcPixel * 3 + 2] : out[plane * 2 + srcPixel];
-        sum[di * 3] += r;
-        sum[di * 3 + 1] += g;
-        sum[di * 3 + 2] += b;
-        weight[di] += 1;
+        result[di * 4] = SuperResEngine.byte(r);
+        result[di * 4 + 1] = SuperResEngine.byte(g);
+        result[di * 4 + 2] = SuperResEngine.byte(b);
+        result[di * 4 + 3] = 255;
       }
     }
   }

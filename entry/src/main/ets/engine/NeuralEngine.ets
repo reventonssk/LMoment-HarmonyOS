@@ -332,12 +332,12 @@ export class NeuralEngine {
     let work = new Rgba(px, w, h);
     const portrait = work.h > work.w;
     if (portrait) {
-      work = NeuralEngine.rotCCW(work.px, work.w, work.h);
+      work = await NeuralEngine.rotCCW(work.px, work.w, work.h);
     }
     let fitted = work;
     if (Math.min(work.w, work.h) < DISTILL_MIN_CANVAS) {
       const s = DISTILL_MIN_CANVAS / Math.min(work.w, work.h);
-      fitted = NeuralEngine.resizeBilinear(work.px, work.w, work.h,
+      fitted = await NeuralEngine.resizeBilinear(work.px, work.w, work.h,
         Math.ceil(work.w * s), Math.ceil(work.h * s));
     }
     const ww = fitted.w;
@@ -373,6 +373,7 @@ export class NeuralEngine {
         const x0 = xs[xi];
         const y0 = ys[yi];
         NeuralEngine.readBlock(fitted.px, ww, wh, x0, y0, n, DISTILL_HALO, tilePx);
+        await yieldUI();
         NeuralEngine.boxDown2(tilePx, n, lowPx);
         if (inHwc) {
           NeuralEngine.fillHWC(tilePx, plane, fullBuf);
@@ -381,6 +382,7 @@ export class NeuralEngine {
           NeuralEngine.fillPlanesCHW(tilePx, plane, fullBuf);
           NeuralEngine.fillPlanesCHW(lowPx, low * low, lowBuf);
         }
+        await yieldUI();
         const feeds: Feed[] = [
           new Feed('lowres', lowDims, lowBuf),
           new Feed('full', fullDims, fullBuf)
@@ -426,10 +428,10 @@ export class NeuralEngine {
     console.info(`NEURAL distill ${ww}x${wh} tiles=${xs.length * ys.length} ${Date.now() - t0}ms`);
     let result = new Rgba(outPx, ww, wh);
     if (ww !== work.w || wh !== work.h) {
-      result = NeuralEngine.resizeBilinear(result.px, ww, wh, work.w, work.h);
+      result = await NeuralEngine.resizeBilinear(result.px, ww, wh, work.w, work.h);
     }
     if (portrait) {
-      result = NeuralEngine.rotCW(result.px, result.w, result.h);
+      result = await NeuralEngine.rotCW(result.px, result.w, result.h);
     }
     return result.px;
   }
@@ -440,12 +442,12 @@ export class NeuralEngine {
     let work = new Rgba(px, w, h);
     const portrait = work.h > work.w;
     if (portrait) {
-      work = NeuralEngine.rotCCW(work.px, work.w, work.h);
+      work = await NeuralEngine.rotCCW(work.px, work.w, work.h);
     }
     let fitted = work;
     if (work.w < LM9_TILE || work.h < LM9_TILE) {
       const s = LM9_TILE / Math.min(work.w, work.h);
-      fitted = NeuralEngine.resizeBilinear(work.px, work.w, work.h,
+      fitted = await NeuralEngine.resizeBilinear(work.px, work.w, work.h,
         Math.ceil(work.w * s), Math.ceil(work.h * s));
     }
     const ww = fitted.w;
@@ -543,10 +545,10 @@ export class NeuralEngine {
     console.info(`NEURAL lm9net ${ww}x${wh} tiles=${xs.length * ys.length} ${Date.now() - t0}ms`);
     let result = new Rgba(outPx, ww, wh);
     if (ww !== work.w || wh !== work.h) {
-      result = NeuralEngine.resizeBilinear(result.px, ww, wh, work.w, work.h);
+      result = await NeuralEngine.resizeBilinear(result.px, ww, wh, work.w, work.h);
     }
     if (portrait) {
-      result = NeuralEngine.rotCW(result.px, result.w, result.h);
+      result = await NeuralEngine.rotCW(result.px, result.w, result.h);
     }
     return result.px;
   }
@@ -554,7 +556,7 @@ export class NeuralEngine {
   /** SepLUT：整图缩 256 喂模型 → 1D LUT(3×17) + 3D LUT(17³)，统一为通道优先平面（轴序 B,G,R）。 */
   private static async sepLutBundle(px: Uint8Array, w: number, h: number): Promise<CcdBundle> {
     const model = await NeuralEngine.ensureModel('seplut_fivek');
-    const small = NeuralEngine.resizeBilinear(px, w, h, 256, 256);
+    const small = await NeuralEngine.resizeBilinear(px, w, h, 256, 256);
     const inHwc = NeuralEngine.modelInputHwc(model);
     const buf = new Float32Array(256 * 256 * 3);
     let dims: number[] = [1, 3, 256, 256];
@@ -789,7 +791,7 @@ export class NeuralEngine {
   }
 
   /** 逆时针 90°（竖转横，对齐 Android rotate(-90)）。 */
-  private static rotCCW(px: Uint8Array, w: number, h: number): Rgba {
+  private static async rotCCW(px: Uint8Array, w: number, h: number): Promise<Rgba> {
     const ow = h;
     const out = new Uint8Array(px.length);
     for (let y = 0; y < h; y++) {
@@ -801,12 +803,15 @@ export class NeuralEngine {
         out[di + 2] = px[si + 2];
         out[di + 3] = 255;
       }
+      if ((y & 255) === 0) {
+        await yieldUI();
+      }
     }
     return new Rgba(out, ow, w);
   }
 
   /** 顺时针 90°（横转回竖，对齐 Android rotate(90)）。 */
-  private static rotCW(px: Uint8Array, w: number, h: number): Rgba {
+  private static async rotCW(px: Uint8Array, w: number, h: number): Promise<Rgba> {
     const ow = h;
     const out = new Uint8Array(px.length);
     for (let y = 0; y < h; y++) {
@@ -818,14 +823,20 @@ export class NeuralEngine {
         out[di + 2] = px[si + 2];
         out[di + 3] = 255;
       }
+      if ((y & 255) === 0) {
+        await yieldUI();
+      }
     }
     return new Rgba(out, ow, w);
   }
 
   /** 中心对齐双线性缩放（边缘钳位）。 */
-  private static resizeBilinear(px: Uint8Array, w: number, h: number, dw: number, dh: number): Rgba {
+  private static async resizeBilinear(px: Uint8Array, w: number, h: number, dw: number, dh: number): Promise<Rgba> {
     const out = new Uint8Array(dw * dh * 4);
     for (let y = 0; y < dh; y++) {
+      if ((y & 127) === 0) {
+        await yieldUI();
+      }
       let sy = (y + 0.5) * h / dh - 0.5;
       sy = sy < 0 ? 0 : (sy > h - 1 ? h - 1 : sy);
       const y0 = sy | 0;
@@ -861,7 +872,7 @@ export class NeuralEngine {
   /** ±amp LSB 三角分布抖动（量化台阶打散）。主线程行分块让出。 */
   private static async tpdfDither(px: Uint8Array, w: number, h: number, amp: number): Promise<void> {
     let st = (0x9E3779B9 ^ Date.now()) | 0;
-    const rows = Math.max(1, Math.floor(262144 / w));
+    const rows = Math.max(1, Math.floor(16384 / w));
     for (let y0 = 0; y0 < h; y0 += rows) {
       const end = (y0 + rows < h ? y0 + rows : h) * w * 4;
       for (let i = y0 * w * 4; i < end; i += 4) {

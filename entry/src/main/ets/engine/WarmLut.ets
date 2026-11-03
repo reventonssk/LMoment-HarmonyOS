@@ -304,7 +304,7 @@ export class WarmApplier {
     const stepR = n * n * 3;
     const stepG = n * 3;
     const scale = nm1 / 255;
-    const rowsPerChunk = 262144 / w > 1 ? Math.floor(262144 / w) : 1;
+    const rowsPerChunk = 16384 / w > 1 ? Math.floor(16384 / w) : 1;
     for (let y0 = 0; y0 < h; y0 += rowsPerChunk) {
       const y1 = y0 + rowsPerChunk < h ? y0 + rowsPerChunk : h;
       for (let y = y0; y < y1; y++) {

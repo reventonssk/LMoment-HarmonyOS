@@ -1,4 +1,5 @@
 import { ImagePipeline } from './ImagePipeline';
+import { yieldUI } from './PixAsync';
 
 export class HdrData {
   readonly gainmapJpeg: Uint8Array;
@@ -173,6 +174,9 @@ export class HdrGainMap {
     const gain: Uint8Array = new Uint8Array(gw * gh * 4);
     const maxEv: number = level === 2 ? 2.5 : (level === 1 ? 2.0 : 1.5);
     for (let y = 0; y < gh; y++) {
+      if ((y & 15) === 0) {
+        await yieldUI();
+      }
       const sy: number = Math.min(height - 1, Math.floor(y / scale));
       for (let x = 0; x < gw; x++) {
         const sx: number = Math.min(width - 1, Math.floor(x / scale));
