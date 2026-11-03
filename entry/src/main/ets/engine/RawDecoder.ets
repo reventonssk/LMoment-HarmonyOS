@@ -11,4 +11,17 @@ export class RawDecoder {
     }
     return rawdecoder.decodeWithThr(data, threshold);
   }
+
+  static decodeLinear(data: Uint8Array, m0: number, m1: number, m2: number,
+    half: boolean): ArrayBuffer | undefined {
+    return rawdecoder.decodeLinear(data, m0, m1, m2, half);
+  }
+
+  static decodeLinearSrgb(data: Uint8Array): ArrayBuffer | undefined {
+    return rawdecoder.decodeLinearSrgb(data);
+  }
+
+  static freeLinear(buffer: ArrayBuffer): void {
+    rawdecoder.freeLinear(buffer);
+  }
 }

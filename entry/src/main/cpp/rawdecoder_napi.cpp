@@ -161,12 +161,116 @@ static napi_value DecodeWithThreshold(napi_env env, napi_callback_info info)
     return DecodeInternal(env, info, threshold);
 }
 
+static napi_value DecodeLinearInternal(napi_env env, napi_callback_info info, bool srgb)
+{
+    size_t argc = 5;
+    napi_value argv[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
+    if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc < 1) {
+        return nullptr;
+    }
+    InputBytes input { nullptr, 0 };
+    if (!ReadBytes(env, argv[0], input)) {
+        return nullptr;
+    }
+    double m0 = 1.0;
+    double m1 = 1.0;
+    double m2 = 1.0;
+    bool half = false;
+    if (argc >= 4) {
+        napi_get_value_double(env, argv[1], &m0);
+        napi_get_value_double(env, argv[2], &m1);
+        napi_get_value_double(env, argv[3], &m2);
+    }
+    if (argc >= 5) {
+        napi_get_value_bool(env, argv[4], &half);
+    }
+    libraw_data_t* raw = libraw_init(0);
+    if (raw == nullptr || libraw_open_buffer(raw, input.data, input.length) != LIBRAW_SUCCESS) {
+        if (raw != nullptr) {
+            libraw_close(raw);
+        }
+        return nullptr;
+    }
+    if (srgb) {
+        raw->params.use_camera_wb = 1;
+        raw->params.use_auto_wb = 0;
+        raw->params.output_color = 1;
+    } else {
+        raw->params.use_camera_wb = 0;
+        raw->params.use_auto_wb = 0;
+        raw->params.output_color = 0;
+        raw->params.user_mul[0] = static_cast<float>(m0);
+        raw->params.user_mul[1] = static_cast<float>(m1);
+        raw->params.user_mul[2] = static_cast<float>(m2);
+        raw->params.user_mul[3] = static_cast<float>(m1);
+    }
+    raw->params.output_bps = 16;
+    raw->params.gamm[0] = 1.0;
+    raw->params.gamm[1] = 1.0;
+    raw->params.no_auto_bright = 1;
+    raw->params.bright = 1.0;
+    raw->params.highlight = 0;
+    raw->params.user_qual = 3;
+    raw->params.half_size = half ? 1 : 0;
+    if (libraw_unpack(raw) != LIBRAW_SUCCESS || libraw_dcraw_process(raw) != LIBRAW_SUCCESS) {
+        libraw_close(raw);
+        return nullptr;
+    }
+    libraw_processed_image_t* image = libraw_dcraw_make_mem_image(raw, nullptr);
+    if (image == nullptr || image->width <= 0 || image->height <= 0 || image->bits != 16) {
+        if (image != nullptr) {
+            libraw_dcraw_clear_mem(image);
+        }
+        libraw_close(raw);
+        return nullptr;
+    }
+    const int32_t width = image->width;
+    const int32_t height = image->height;
+    const size_t nbytes = static_cast<size_t>(width) * static_cast<size_t>(height) *
+        image->colors * 2u;
+    napi_value buffer = nullptr;
+    void* dst = nullptr;
+    if (napi_create_arraybuffer(env, 8 + nbytes, &dst, &buffer) != napi_ok || dst == nullptr) {
+        libraw_dcraw_clear_mem(image);
+        libraw_close(raw);
+        return nullptr;
+    }
+    unsigned char* base = static_cast<unsigned char*>(dst);
+    int32_t* head = reinterpret_cast<int32_t*>(base);
+    head[0] = width;
+    head[1] = height;
+    std::memcpy(base + 8, image->data, nbytes);
+    libraw_dcraw_clear_mem(image);
+    libraw_close(raw);
+    return buffer;
+}
+
+static napi_value DecodeLinear(napi_env env, napi_callback_info info)
+{
+    return DecodeLinearInternal(env, info, false);
+}
+
+static napi_value DecodeLinearSrgb(napi_env env, napi_callback_info info)
+{
+    return DecodeLinearInternal(env, info, true);
+}
+
+static napi_value FreeLinear(napi_env env, napi_callback_info info)
+{
+    napi_value undefined = nullptr;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+}
+
 static napi_value Init(napi_env env, napi_value exports)
 {
     napi_property_descriptor properties[] = {
         { "extractPreview", nullptr, ExtractPreview, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "decode", nullptr, Decode, nullptr, nullptr, nullptr, napi_default, nullptr },
-        { "decodeWithThr", nullptr, DecodeWithThreshold, nullptr, nullptr, nullptr, napi_default, nullptr }
+        { "decodeWithThr", nullptr, DecodeWithThreshold, nullptr, nullptr, nullptr, napi_default, nullptr },
+        { "decodeLinear", nullptr, DecodeLinear, nullptr, nullptr, nullptr, napi_default, nullptr },
+        { "decodeLinearSrgb", nullptr, DecodeLinearSrgb, nullptr, nullptr, nullptr, napi_default, nullptr },
+        { "freeLinear", nullptr, FreeLinear, nullptr, nullptr, nullptr, napi_default, nullptr }
     };
     napi_define_properties(env, exports, sizeof(properties) / sizeof(properties[0]), properties);
     return exports;

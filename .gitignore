@@ -17,3 +17,6 @@
 /models-src
 /hap-archive
 *.hap.bak
+/pili-ref
+/zhihu-ref
+/dfx-reports
