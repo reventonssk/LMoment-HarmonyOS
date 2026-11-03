@@ -10,6 +10,7 @@ import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
 import { deviceInfo } from '@kit.BasicServicesKit';
 import { StyleCategories } from './StyleDefs';
+import { ImmersiveStyle } from '../common/ImmersiveStyle';
 
 const FILE_NAME: string = 'lm_settings';
 const KEY_DEFAULT: string = 'default_category';
@@ -28,6 +29,7 @@ const KEY_HDR_BOOST: string = 'hdr_boost_level';
 const KEY_HDR_HINT: string = 'hdr_hint_shown';
 const KEY_HDR_DEFAULT_ON: string = 'hdr_default_on';
 const KEY_INAPP_CAPTURE: string = 'inapp_capture_mode';
+const KEY_IMMERSIVE_LEVEL: string = 'immersive_material_mode';
 
 export class SettingsStore {
   /** 「记忆上次」在 default_category 里的取值。 */
@@ -331,5 +333,17 @@ export class SettingsStore {
 
   static setInappCaptureMode(mode: string): void {
     SettingsStore.put(KEY_INAPP_CAPTURE, mode === 'off' ? 'off' : 'auto');
+  }
+
+  // ---- 沉浸光感（对齐 zhihu-plus-plus-HMOS 四挡）----
+
+  /** 沉浸光感挡位：adaptive（默认）/ exquisite / gentle / smooth。 */
+  static immersiveLevel(): string {
+    return SettingsStore.str(KEY_IMMERSIVE_LEVEL, 'adaptive');
+  }
+
+  static setImmersiveLevel(mode: string): void {
+    SettingsStore.put(KEY_IMMERSIVE_LEVEL, mode);
+    ImmersiveStyle.publish(mode);
   }
 }

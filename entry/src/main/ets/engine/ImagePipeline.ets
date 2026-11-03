@@ -6,9 +6,12 @@
 
 import { image } from '@kit.ImageKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
+import { picker } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { cameraPicker, camera } from '@kit.CameraKit';
 import { common } from '@kit.AbilityKit';
+import { RawTaskRunner } from './RawTask';
+import { PixelScale } from './PixelScale';
 
 export class DecodedImage {
   readonly pixelMap: image.PixelMap;
@@ -33,6 +36,67 @@ export class ImagePipeline {
   /** 导出工作上限：长边 ≤ 4096、短边 ≤ 3072（对齐 Android MAX_WORK_*）。 */
   static readonly WORK_LONG = 4096;
   static readonly WORK_SHORT = 3072;
+  /** 全像素导出：不缩放的哨兵长边（decodeUri 内部按 min(1, edge/long) 取 1）。 */
+  static readonly FULL_EDGE = 100000;
+  /** M9 系高分辨率档长边上限（m9_hires_export）。 */
+  static readonly HIRES_M9_EDGE = 8192;
+  /** 全像素导出安全像素预算：≤ 12MP 走原分辨率，超出回落工作上限（防内存峰值）。 */
+  static readonly SAFE_EXPORT_PIXELS = 12 * 1024 * 1024;
+
+  /** 快速探测源图尺寸 [w,h]（仅读 image info，不解码像素）；失败返回空数组。 */
+  static async probeSize(uri: string): Promise<number[]> {
+    let file: fs.File | undefined = undefined;
+    let source: image.ImageSource | undefined = undefined;
+    try {
+      file = fs.openSync(uri, fs.OpenMode.READ_ONLY);
+      source = image.createImageSource(file.fd);
+      const info = await source.getImageInfo();
+      if (info.size.width < 1 || info.size.height < 1) {
+        return [];
+      }
+      return [info.size.width, info.size.height];
+    } catch (e) {
+      return [];
+    } finally {
+      if (source !== undefined) {
+        try {
+          await source.release();
+        } catch (e) {
+        }
+      }
+      if (file !== undefined) {
+        try {
+          fs.closeSync(file);
+        } catch (e) {
+        }
+      }
+    }
+  }
+
+  /** 读文件头 maxBytes 字节（EXIF APP1 提取用）；失败返回空数组。 */
+  static readHead(uri: string, maxBytes: number): Uint8Array {
+    let file: fs.File | undefined = undefined;
+    try {
+      file = fs.openSync(uri, fs.OpenMode.READ_ONLY);
+      const size = fs.statSync(file.fd).size;
+      const n = Math.min(maxBytes, size);
+      if (n <= 0) {
+        return new Uint8Array(0);
+      }
+      const ab = new ArrayBuffer(n);
+      fs.readSync(file.fd, ab);
+      return new Uint8Array(ab);
+    } catch (e) {
+      return new Uint8Array(0);
+    } finally {
+      if (file !== undefined) {
+        try {
+          fs.closeSync(file);
+        } catch (e) {
+        }
+      }
+    }
+  }
 
   /**
    * URI（file:// 或图库 photo://）→ 降采样 + EXIF 旋转的 RGBA。
@@ -237,6 +301,54 @@ export class ImagePipeline {
     return '';
   }
 
+  /** 系统图库多选（模型色彩参考图），返回 URI 列表；取消返回空。 */
+  static async pickImages(max: number): Promise<string[]> {
+    const picker = new photoAccessHelper.PhotoViewPicker();
+    const res = await picker.select({
+      MIMEType: photoAccessHelper.PhotoViewMIMETypes.IMAGE_TYPE,
+      maxSelectNumber: max
+    });
+    const out: string[] = [];
+    if (res.photoUris !== undefined) {
+      for (let i = 0; i < res.photoUris.length; i++) {
+        out.push(res.photoUris[i]);
+      }
+    }
+    return out;
+  }
+
+  /** DocumentViewPicker 选择 RAW/DNG 文件，返回 URI；取消返回 ''。 */
+  static async pickRaw(context: common.Context): Promise<string> {
+    const doc = new picker.DocumentViewPicker(context);
+    const opts: picker.DocumentSelectOptions = {
+      fileSuffixFilters: ['RAW (.dng)|.dng', '.DNG', '.dng']
+    };
+    const uris = await doc.select(opts);
+    if (uris !== undefined && uris.length > 0) {
+      return uris[0];
+    }
+    return '';
+  }
+
+  /**
+   * RAW/DNG URI → RGBA：解码链全部在 taskpool 工作线程执行
+   * （优先厂商内嵌预览，回退 LibRaw 解码），主线程仅做 RGBA→PixelMap 包装。
+   * threshold 为 auto_bright 阈值（按机型设置，0.01/0.03/0.04）。
+   */
+  static async decodeRaw(uri: string, threshold: number, maxEdge: number): Promise<DecodedImage | undefined> {
+    try {
+      const r = await RawTaskRunner.run(uri, threshold, maxEdge);
+      if (r === undefined) {
+        return undefined;
+      }
+      const px = new Uint8Array(r.rgba);
+      const pm = await ImagePipeline.rgbaToPixelMap(px, r.width, r.height);
+      return new DecodedImage(pm, r.width, r.height, px);
+    } catch (e) {
+      return undefined;
+    }
+  }
+
   /** 系统相机拍照（cameraPicker 免相机权限，照片入公共媒体库），返回 URI；取消/不可用返回 ''。 */
   static async takePhoto(context: common.Context): Promise<string> {
     try {
@@ -328,38 +440,8 @@ export class ImagePipeline {
     return Math.min(1, ImagePipeline.WORK_LONG / long, ImagePipeline.WORK_SHORT / short);
   }
 
-  /** 紧密 RGBA 盒式降采样（生成缩略图源）。 */
+  /** 紧密 RGBA 盒式降采样（生成缩略图源；实现见 PixelScale，taskpool 共用）。 */
   static downscaleRgba(src: Uint8Array, sw: number, sh: number, dw: number, dh: number): Uint8Array {
-    const out = new Uint8Array(dw * dh * 4);
-    const xRatio = sw / dw;
-    const yRatio = sh / dh;
-    for (let dy = 0; dy < dh; dy++) {
-      const y0 = Math.floor(dy * yRatio);
-      const y1 = Math.min(sh, Math.max(y0 + 1, Math.floor((dy + 1) * yRatio)));
-      for (let dx = 0; dx < dw; dx++) {
-        const x0 = Math.floor(dx * xRatio);
-        const x1 = Math.min(sw, Math.max(x0 + 1, Math.floor((dx + 1) * xRatio)));
-        let r = 0;
-        let g = 0;
-        let b = 0;
-        let n = 0;
-        for (let y = y0; y < y1; y++) {
-          const row = y * sw * 4;
-          for (let x = x0; x < x1; x++) {
-            const i = row + x * 4;
-            r += src[i];
-            g += src[i + 1];
-            b += src[i + 2];
-            n++;
-          }
-        }
-        const o = (dy * dw + dx) * 4;
-        out[o] = Math.round(r / n);
-        out[o + 1] = Math.round(g / n);
-        out[o + 2] = Math.round(b / n);
-        out[o + 3] = 255;
-      }
-    }
-    return out;
+    return PixelScale.downscaleRgba(src, sw, sh, dw, dh);
   }
 }

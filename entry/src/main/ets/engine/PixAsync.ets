@@ -4,6 +4,6 @@
 
 export function yieldUI(): Promise<void> {
   return new Promise<void>((resolve: () => void) => {
-    setTimeout(resolve, 0);
+    setTimeout(resolve, 1);
   });
 }

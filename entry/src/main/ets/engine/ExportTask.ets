@@ -13,6 +13,7 @@ import { StyleAModel } from './StyleAEngine';
 import { ToneCurves } from './ToneCurves';
 import { SoftGlow } from './SoftGlow';
 import { StyleMode } from './StyleDefs';
+import { ModelColorMath } from './ModelColorMath';
 
 @Concurrent
 export function runStyleTask(rgba: ArrayBuffer, w: number, h: number, mode: StyleMode,
@@ -39,6 +40,61 @@ export function runStyleTask(rgba: ArrayBuffer, w: number, h: number, mode: Styl
     SoftGlow.apply(px, w, h, levels[ToneCurves.TONE_COUNT]);
   }
   return rgba;
+}
+
+/**
+ * taskpool 工作任务：模型色彩（aff/knots）+ 色调曲线 + 柔光（Batch H）。
+ * 参数全部为可序列化对象；aff[12]/knots[27] 用 number[] 传（Float32Array 不可跨 taskpool）。
+ * 失败抛 Error，由调用方 toast。
+ */
+@Concurrent
+export function runModelColorTask(rgba: ArrayBuffer, w: number, h: number,
+  aff: number[], knots: number[], protect: boolean, guard: boolean, smooth: boolean,
+  strength: number, levels: number[]): ArrayBuffer {
+  const px = new Uint8Array(rgba);
+  const fAff = new Float32Array(12);
+  const fKnots = new Float32Array(27);
+  for (let i = 0; i < 12 && i < aff.length; i++) {
+    fAff[i] = aff[i];
+  }
+  for (let i = 0; i < 27 && i < knots.length; i++) {
+    fKnots[i] = knots[i];
+  }
+  ModelColorMath.apply(px, w, h, fAff, fKnots, protect, guard, strength, smooth);
+  ToneCurves.apply(px, levels);
+  if (levels.length > ToneCurves.TONE_COUNT) {
+    SoftGlow.apply(px, w, h, levels[ToneCurves.TONE_COUNT]);
+  }
+  return rgba;
+}
+
+/** UI 线程侧封装：拷贝入参、派发任务、返回处理后的 RGBA。 */
+export class ModelColorRunner {
+  static async run(src: Uint8Array, w: number, h: number,
+    aff: Float32Array, knots: Float32Array,
+    protect: boolean, guard: boolean, smooth: boolean, strength: number,
+    levels: number[]): Promise<Uint8Array> {
+    const srcCopy = new ArrayBuffer(src.byteLength);
+    new Uint8Array(srcCopy).set(src);
+    const a: number[] = [];
+    for (let i = 0; i < aff.length; i++) {
+      a.push(aff[i]);
+    }
+    const k: number[] = [];
+    for (let i = 0; i < knots.length; i++) {
+      k.push(knots[i]);
+    }
+    const lv: number[] = [];
+    for (let i = 0; i < levels.length; i++) {
+      lv.push(levels[i]);
+    }
+    const out = await taskpool.execute(runModelColorTask, srcCopy, w, h,
+      a, k, protect, guard, smooth, strength, lv);
+    if (out instanceof ArrayBuffer) {
+      return new Uint8Array(out);
+    }
+    return new Uint8Array(0);
+  }
 }
 
 /** UI 线程侧封装：拷贝入参、派发任务、返回处理后的 RGBA。 */
