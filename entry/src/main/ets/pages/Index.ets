@@ -3028,7 +3028,7 @@ struct Index {
         }
         .width('100%')
         .height('100%')
-        .backgroundColor('#141416')
+        .backgroundColor('#000000')
         .onAreaChange((_o: Area, n: Area) => {
           this.pvW = this.areaNum(n.width);
           this.pvH = this.areaNum(n.height);
@@ -3104,10 +3104,10 @@ struct Index {
       .hitTestBehavior(HitTestMode.Transparent)
 
       // 底部悬浮玻璃容器（分类 / 风格卡 / 操作栏 / 调整面板；手势条经 bottomInset 避让）
-      // bleed 80：玻璃画布两侧各出血 80 再被裁剪，HDS 材质圆角推出可视区 → 直角玻璃边缘
+      // GlassPanel 为方形高斯模糊遮罩（无圆角）
       Column() {
         Blank()
-        GlassPanel({ bleed: 80 }) {
+        GlassPanel() {
           Column() {
             Scroll() {
               Row({ space: 8 }) {
@@ -3166,7 +3166,8 @@ struct Index {
                 })
               }
               Blank()
-              // SaveButton（安全组件不可重构）玻璃托盘：实测尺寸+边距的玻璃衬底垫在按钮下
+              // SaveButton（安全组件不可重构、不可被上层遮挡——遮挡后点击授权失效）：
+              // 玻璃托盘垫底（z 序在下不遮挡），按钮本身走深色模式渲染深色底+蓝色字
               Stack() {
                 if (this.saveTrayW > 1 && this.saveTrayH > 1) {
                   GlassCanvas({

@@ -81,49 +81,26 @@ export struct GlassCanvas {
 }
 
 /**
- * 玻璃容器：内容决定高度（自然堆叠），宽度随容器 100%；玻璃画布在内容实测尺寸
- * 就绪后按精确数值叠加（首帧无玻璃，次帧校正——避免内容 100% 依赖画布尺寸造成
- * 测量死锁）。
- * 用法：GlassPanel() { 内容组件 }。
+ * 方形玻璃遮罩容器：内容决定高度，宽度随容器 100%；背景为矩形高斯模糊
+ * （backgroundBlurStyle.COMPONENT_THICK）+ 半透明深色，无圆角——直角玻璃边缘。
+ * 与 GlassCanvas（HDS 沉浸材质，柔光圆角）互补：大面板用本组件保证方形遮罩，
+ * 小按钮/托盘用 GlassCanvas 保留材质光感。用法：GlassPanel() { 内容组件 }。
  */
 @Component
 export struct GlassPanel {
   @BuilderParam panelContent: () => void = this.emptyContent;
-  /** 水平出血（vp）：玻璃画布向两侧各扩展该宽度再被 Stack 裁剪，
-   * 把 HDS 材质自带的圆角推出可视区，呈现直角玻璃边缘。0 = 不出血。 */
-  @Prop bleed: number = 0;
-  @State private canvasWidth: number = 0;
-  @State private canvasHeight: number = 0;
 
   @Builder
   private emptyContent(): void {
   }
 
   build() {
-    Stack({ alignContent: Alignment.Center }) {
-      if (this.canvasWidth > 1 && this.canvasHeight > 1) {
-        GlassCanvas({
-          canvasWidth: this.canvasWidth + this.bleed * 2,
-          canvasHeight: this.canvasHeight
-        })
-      }
-      Column() {
-        this.panelContent()
-      }
-      .width('100%')
-      .onAreaChange((_: Area, newValue: Area): void => {
-        const width = Number(newValue.width);
-        const height = Number(newValue.height);
-        if (width > 1 && Math.abs(width - this.canvasWidth) > 0.5) {
-          this.canvasWidth = width;
-        }
-        if (height > 1 && Math.abs(height - this.canvasHeight) > 0.5) {
-          this.canvasHeight = height;
-        }
-      })
+    Column() {
+      this.panelContent()
     }
     .width('100%')
-    .clip(true)
+    .backgroundColor('rgba(0,0,0,0.6)')
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
   }
 }
 
