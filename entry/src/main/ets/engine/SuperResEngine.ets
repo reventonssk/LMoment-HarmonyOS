@@ -1,5 +1,6 @@
 import { mindSporeLite } from '@kit.MindSporeLiteKit';
 import { resourceManager } from '@kit.LocalizationKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { yieldUI } from './PixAsync';
 
 export enum SuperResMode {
@@ -231,5 +232,73 @@ export class SuperResEngine {
 
   private static byte(value: number): number {
     return Math.max(0, Math.min(255, Math.round(value * 255)));
+  }
+
+  /** 导出诊断：未写像素计数（黑缝决定性信号，未写处 alpha 恒为 0）+ 块接缝行/列均值跳变对比。 */
+  static scanSeam(data: Uint8Array, w: number, h: number): void {
+    let unwritten: number = 0;
+    const rowMean: Float64Array = new Float64Array(h);
+    const colMean: Float64Array = new Float64Array(w);
+    for (let y = 0; y < h; y++) {
+      const rowBase: number = y * w * 4;
+      let sum: number = 0;
+      for (let x = 0; x < w; x++) {
+        const i: number = rowBase + x * 4;
+        if (data[i + 3] !== 255) {
+          unwritten++;
+        }
+        const lum: number = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        sum += lum;
+        colMean[x] += lum;
+      }
+      rowMean[y] = sum / w;
+    }
+    for (let x = 0; x < w; x++) {
+      colMean[x] /= h;
+    }
+    const seamsY: number[] = SuperResEngine.seamPositions(h);
+    const seamsX: number[] = SuperResEngine.seamPositions(w);
+    let seamY: number = 0;
+    let otherY: number = 0;
+    for (let y = 1; y < h; y++) {
+      const d: number = Math.abs(rowMean[y] - rowMean[y - 1]);
+      if (seamsY.indexOf(y) >= 0) {
+        if (d > seamY) {
+          seamY = d;
+        }
+      } else if (d > otherY) {
+        otherY = d;
+      }
+    }
+    let seamX: number = 0;
+    let otherX: number = 0;
+    for (let x = 1; x < w; x++) {
+      const d: number = Math.abs(colMean[x] - colMean[x - 1]);
+      if (seamsX.indexOf(x) >= 0) {
+        if (d > seamX) {
+          seamX = d;
+        }
+      } else if (d > otherX) {
+        otherX = d;
+      }
+    }
+    hilog.info(0xD002, 'SRScan',
+      'scan %{public}dx%{public}d unwritten=%{public}d seams=%{public}d+%{public}d seamY=%{public}s otherY=%{public}s seamX=%{public}s otherX=%{public}s',
+      w, h, unwritten, seamsY.length, seamsX.length,
+      seamY.toFixed(2), otherY.toFixed(2), seamX.toFixed(2), otherX.toFixed(2));
+  }
+
+  /** 由 offsets() 精确推算输出坐标系中的接缝位置（末块钳位后不再是整齐的 k*480）。 */
+  private static seamPositions(outSize: number): number[] {
+    const inputSize: number = Math.floor(outSize / 2);
+    if (inputSize <= SuperResEngine.TILE) {
+      return [];
+    }
+    const offs: number[] = SuperResEngine.offsets(inputSize);
+    const result: number[] = [];
+    for (let i = 1; i < offs.length; i++) {
+      result.push(offs[i] * 2 + SuperResEngine.OVERLAP);
+    }
+    return result;
   }
 }

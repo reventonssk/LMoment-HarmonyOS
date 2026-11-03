@@ -2072,6 +2072,7 @@ struct Index {
         this.exportStage(62, '超分处理中');
         const upscaled = await SuperResEngine.upscale(out, w, h, this.superResMode);
         if (upscaled !== undefined) {
+          SuperResEngine.scanSeam(upscaled.data, upscaled.width, upscaled.height);
           out = upscaled.data;
           w = upscaled.width;
           h = upscaled.height;
