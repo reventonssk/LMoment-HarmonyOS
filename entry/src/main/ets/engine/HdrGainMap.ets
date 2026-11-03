@@ -320,13 +320,20 @@ export class HdrGainMap {
   }
 
   private static strip(jpeg: Uint8Array): Uint8Array {
-    const out: number[] = [];
-    out.push(jpeg[0], jpeg[1]);
+    // 分段收集 + 一次 set 拼接：push(...spread) 对整段扫描数据（数 MB）会爆栈，
+    // 是 HDR 导出闪退的疑似根因之一，禁止再对大数组用 spread
+    const segs: Uint8Array[] = [];
+    let total: number = 0;
+    const head: Uint8Array = jpeg.subarray(0, 2);
+    segs.push(head);
+    total += head.length;
     let pos: number = 2;
     while (pos + 4 <= jpeg.length && jpeg[pos] === 0xFF) {
       const marker: number = jpeg[pos + 1];
       if (marker === 0xDA || marker === 0xD9) {
-        out.push(...jpeg.slice(pos));
+        const tail: Uint8Array = jpeg.subarray(pos);
+        segs.push(tail);
+        total += tail.length;
         break;
       }
       const len: number = HdrGainMap.u16(jpeg, pos + 2, true);
@@ -337,11 +344,19 @@ export class HdrGainMap {
         marker === 0xE2 && (HdrGainMap.matchAt(jpeg, pos + 4, HdrGainMap.ascii('MPF\u0000')) ||
           HdrGainMap.matchAt(jpeg, pos + 4, HdrGainMap.ascii('urn:')));
       if (!drop) {
-        out.push(...jpeg.slice(pos, pos + 2 + len));
+        const seg: Uint8Array = jpeg.subarray(pos, pos + 2 + len);
+        segs.push(seg);
+        total += seg.length;
       }
       pos += 2 + len;
     }
-    return new Uint8Array(out);
+    const out: Uint8Array = new Uint8Array(total);
+    let off: number = 0;
+    for (let i = 0; i < segs.length; i++) {
+      out.set(segs[i], off);
+      off += segs[i].length;
+    }
+    return out;
   }
 
   private static truncate(jpeg: Uint8Array): Uint8Array {

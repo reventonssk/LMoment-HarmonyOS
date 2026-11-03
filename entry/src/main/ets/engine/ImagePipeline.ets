@@ -98,6 +98,31 @@ export class ImagePipeline {
     }
   }
 
+  /** 读文件 offset 起 maxBytes 字节（DNG 远端 XMP 包读取用）；越界/失败返回空数组。 */
+  static readRange(uri: string, offset: number, maxBytes: number): Uint8Array {
+    let file: fs.File | undefined = undefined;
+    try {
+      file = fs.openSync(uri, fs.OpenMode.READ_ONLY);
+      const size = fs.statSync(file.fd).size;
+      if (offset < 0 || offset >= size) {
+        return new Uint8Array(0);
+      }
+      const n = Math.min(maxBytes, size - offset);
+      const ab = new ArrayBuffer(n);
+      fs.readSync(file.fd, ab, { offset: offset });
+      return new Uint8Array(ab);
+    } catch (e) {
+      return new Uint8Array(0);
+    } finally {
+      if (file !== undefined) {
+        try {
+          fs.closeSync(file);
+        } catch (e) {
+        }
+      }
+    }
+  }
+
   /**
    * URI（file:// 或图库 photo://）→ 降采样 + EXIF 旋转的 RGBA。
    * capShort > 0 时附加短边上限（导出口径：长 4096 / 短 3072）。
@@ -321,7 +346,10 @@ export class ImagePipeline {
   static async pickRaw(context: common.Context): Promise<string> {
     const doc = new picker.DocumentViewPicker(context);
     const opts: picker.DocumentSelectOptions = {
-      fileSuffixFilters: ['RAW (.dng)|.dng', '.DNG', '.dng']
+      maxSelectNumber: 1,
+      fileSuffixFilters: ['.dng', '.DNG', '.nef', '.NEF', '.nrw', '.NRW', '.arw', '.ARW',
+        '.cr2', '.CR2', '.cr3', '.CR3', '.raf', '.RAF', '.orf', '.ORF', '.rw2', '.RW2',
+        '.pef', '.PEF', '.srw', '.SRW', '.raw', '.RAW', '.rwl', '.RWL', '.x3f', '.X3F']
     };
     const uris = await doc.select(opts);
     if (uris !== undefined && uris.length > 0) {

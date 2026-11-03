@@ -9,6 +9,7 @@ import { image } from '@kit.ImageKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { window } from '@kit.ArkUI';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { StyleDef, StyleDefs, StyleMode, StyleCategory, StyleCategories } from '../engine/StyleDefs';
 import { StyleEngine } from '../engine/StyleEngine';
 import { Lut3D } from '../engine/Lut3D';
@@ -29,8 +30,10 @@ import { SuperResEngine, SuperResMode } from '../engine/SuperResEngine';
 import { InAppCapture } from '../engine/InAppCapture';
 import { AppCamera, CaptureShot } from '../engine/AppCamera';
 import { LeicaMark } from '../engine/LeicaMark';
+import { RawExif } from '../engine/RawExif';
 import { ColorBackup, ColorBackupItem } from '../engine/ColorBackup';
 import { M9PerfectEngine, RgbaImg } from '../engine/M9PerfectEngine';
+import { ExportNotify } from '../engine/ExportNotify';
 import { yieldUI } from '../engine/PixAsync';
 import { GlassButton, GlassCanvas, GlassPanel, estimateTextWidth } from '../common/GlassPanel';
 import { ImmersiveStyle } from '../common/ImmersiveStyle';
@@ -1402,7 +1405,12 @@ struct Index {
         this.deleteCapturedFile();
         this.pickedUri = '';
         this.rawSourceUri = path;
-        this.srcExifApp1 = new Uint8Array(0); // DNG 直拍无 JPEG APP1
+        // DNG 直拍：从 TIFF EXIF 重建 APP1（Make/Model/拍摄参数），导出时移植
+        const dngHead = ImagePipeline.readHead(path, 262144);
+        const dngApp1 = RawExif.extractApp1(dngHead,
+          (off: number, len: number): Uint8Array => ImagePipeline.readRange(path, off, len));
+        hilog.info(0x0000, 'RawExif', `capture dng head=${dngHead.length} app1=${dngApp1?.length ?? -1}`);
+        this.srcExifApp1 = dngApp1 !== undefined ? dngApp1 : new Uint8Array(0);
         await this.applyDecoded(d);
       } else {
         // JPEG 兜底（DNG 档意外产出 JPEG 时）：常规加载路径
@@ -1482,7 +1490,12 @@ struct Index {
       }
       this.pickedUri = '';
       this.rawSourceUri = uri;
-      this.srcExifApp1 = new Uint8Array(0); // RAW 无 JPEG APP1，导出走 Software 模板
+      // RAW：从 TIFF EXIF 重建 APP1（Make/Model/拍摄参数），导出时移植
+      const dngHead = ImagePipeline.readHead(uri, 262144);
+      const dngApp1 = RawExif.extractApp1(dngHead,
+        (off: number, len: number): Uint8Array => ImagePipeline.readRange(uri, off, len));
+      hilog.info(0x0000, 'RawExif', `pick dng head=${dngHead.length} app1=${dngApp1?.length ?? -1}`);
+      this.srcExifApp1 = dngApp1 !== undefined ? dngApp1 : new Uint8Array(0);
       await this.applyDecoded(d);
     } catch (e) {
       this.processing = false;
@@ -1872,15 +1885,21 @@ struct Index {
     if (c === undefined) {
       return undefined;
     }
-    this.exportProgress = 0;
+    this.exportStage(0, '完美档处理中');
     this.toast('完美档处理中…');
     const r = await M9PerfectEngine.process(src, w, h, c.resourceManager, (v: number) => {
-      this.exportProgress = v;
+      this.exportStage(Math.round(v * 0.6), '完美档处理中');
     });
     if (r === undefined) {
       this.exportProgress = 0;
     }
     return r;
+  }
+
+  /** 导出阶段进度：应用内覆盖层 + 后台进度条通知共用。 */
+  private exportStage(pct: number, label: string): void {
+    this.exportProgress = pct;
+    ExportNotify.progress(pct, label);
   }
 
   /**
@@ -1935,6 +1954,8 @@ struct Index {
       return;
     }
     this.exporting = true;
+    this.exportProgress = 0;
+    await ExportNotify.begin(c);
     let target: string = '';
     let exportPm: image.PixelMap | undefined = undefined;
     try {
@@ -1952,11 +1973,25 @@ struct Index {
         h = d.height;
         d.pixelMap.release().catch(() => {
         });
+      } else if (this.rawSourceUri !== '') {
+        // RAW/DNG：按导出档重解码全分辨率（不再用 1024 预览缓冲，修清晰度/体积）
+        const edge = SettingsStore.fullResEnabled() ? ImagePipeline.FULL_EDGE : 3072;
+        const d = await ImagePipeline.decodeRaw(this.rawSourceUri, SettingsStore.rawThr(), edge);
+        if (d === undefined) {
+          throw new Error('RAW 解码失败');
+        }
+        src = d.data;
+        w = d.width;
+        h = d.height;
+        d.pixelMap.release().catch(() => {
+        });
       } else {
         src = this.origBuf;
         w = this.origW;
         h = this.origH;
       }
+      this.exportStage(10, '正在解码原图');
+      this.exportStage(15, '正在应用风格');
       const key = this.selectedKey;
       const perfectOut = (this.perfectOn && this.isM9Family())
         ? await this.perfectExport(src, w, h) : undefined;
@@ -2026,6 +2061,7 @@ struct Index {
             lutBin, saBin, this.levels);
         }
       }
+      this.exportStage(58, '风格处理完成');
       const canRunSuperRes: boolean = this.superResEnabled;
       const safeSuperRes: boolean = canRunSuperRes &&
         w * h <= SuperResEngine.MAX_SAFE_INPUT_PIXELS;
@@ -2033,22 +2069,31 @@ struct Index {
         this.toast('手机内存保护：图片过大，超分已跳过，保留完整普通导出');
       }
       if (safeSuperRes) {
+        this.exportStage(62, '超分处理中');
         const upscaled = await SuperResEngine.upscale(out, w, h, this.superResMode);
         if (upscaled !== undefined) {
           out = upscaled.data;
           w = upscaled.width;
           h = upscaled.height;
+          this.exportStage(78, '超分完成');
         } else {
           this.toast('当前图像较大，超分已降级为普通导出');
         }
       }
       exportPm = await ImagePipeline.rgbaToPixelMap(out, w, h);
+      this.exportStage(84, '正在编码');
       const jpeg = await ImagePipeline.packJpeg(exportPm, 95);
       // 徽章收口先于 HDR 回嵌：mark 剥离 XMP/MPF/ISO 复合容器并移植源图 EXIF，
       // 必须在增益图写入前执行；徽章 = EXIF 私有 tag + FFE4 段（原版口径，无像素水印）。
       const marked = LeicaMark.mark(jpeg, this.srcExifApp1, SettingsStore.leicaBadgeEnabled());
+      const finApp1 = LeicaMark.extractApp1(marked);
+      if (finApp1 !== undefined) {
+        hilog.info(0x0000, 'RawExif',
+          `mark final ${RawExif.diagnose(finApp1)} | src ${RawExif.diagnose(this.srcExifApp1)}`);
+      }
       let finalJpeg: Uint8Array = marked;
       if (this.hdrEnabled) {
+        this.exportStage(90, '正在合成HDR增益图');
         const hdr = await HdrGainMap.synthFromRgba(out, w, h, SettingsStore.hdrBoostLevel());
         if (hdr !== undefined) {
           finalJpeg = HdrGainMap.embed(marked, hdr);
@@ -2056,7 +2101,12 @@ struct Index {
       } else {
         finalJpeg = HdrGainMap.truncateToPrimary(marked);
       }
+      this.exportStage(95, '正在写入图库');
+      hilog.info(0xF100, 'leicamoments', 'export dims %{public}dx%{public}d srcRes=%{public}s',
+        w, h, this.pickedUri !== '' ? 'picked' : 'test');
       await ImagePipeline.writeToGallery(target, finalJpeg);
+      this.exportProgress = 100;
+      await ExportNotify.finish(c, true, '已保存到图库');
       exportPm.release().catch(() => {
       });
       exportPm = undefined;
@@ -2068,6 +2118,7 @@ struct Index {
         exportPm = undefined;
       }
       const msg = e instanceof Error ? e.message : '未知错误';
+      await ExportNotify.finish(c, false, '导出失败：' + msg);
       this.toast('导出失败：' + msg);
     }
     this.exporting = false;
@@ -3016,7 +3067,7 @@ struct Index {
                 .height(44)
                 .color('#E8B84B')
               Text(this.modelBusy ? '模型推理中…'
-                : (this.exporting ? '导出中…' : '处理中…'))
+                : (this.exporting ? `导出中… ${this.exportProgress}%` : '处理中…'))
                 .fontSize(12)
                 .fontColor('#CCCCCC')
             }
@@ -3138,34 +3189,43 @@ struct Index {
             .align(Alignment.Center)
 
             Row({ space: 10 }) {
-              GlassButton({
-                label: this.showAdjust ? '收起' : '调整',
-                buttonWidth: 76,
-                buttonHeight: 38,
-                clickAction: (): void => {
-                  this.showAdjust = !this.showAdjust;
-                }
-              })
-              GlassButton({
-                label: '导入码',
-                buttonWidth: 90,
-                buttonHeight: 38,
-                clickAction: (): void => {
-                  this.showImport = true;
-                }
-              })
-              if (this.isM9Family()) {
-                GlassButton({
-                  label: this.perfectOn ? '完美 ✓' : '完美',
-                  buttonWidth: 98,
-                  buttonHeight: 38,
-                  selected: this.perfectOn,
-                  clickAction: (): void => {
-                    this.perfectOn = !this.perfectOn;
+              // 托盘按钮包进 layoutWeight(1) 横向 Scroll：固定宽按钮在窄屏上
+              // 不再把 SaveButton 挤出屏幕（IsOutOfScreen / error -56 实证）
+              Scroll() {
+                Row({ space: 10 }) {
+                  GlassButton({
+                    label: this.showAdjust ? '收起' : '调整',
+                    buttonWidth: 76,
+                    buttonHeight: 38,
+                    clickAction: (): void => {
+                      this.showAdjust = !this.showAdjust;
+                    }
+                  })
+                  GlassButton({
+                    label: '导入码',
+                    buttonWidth: 90,
+                    buttonHeight: 38,
+                    clickAction: (): void => {
+                      this.showImport = true;
+                    }
+                  })
+                  if (this.isM9Family()) {
+                    GlassButton({
+                      label: this.perfectOn ? '完美 ✓' : '完美',
+                      buttonWidth: 98,
+                      buttonHeight: 38,
+                      selected: this.perfectOn,
+                      clickAction: (): void => {
+                        this.perfectOn = !this.perfectOn;
+                      }
+                    })
                   }
-                })
+                }
               }
-              Blank()
+              .scrollable(ScrollDirection.Horizontal)
+              .scrollBar(BarState.Off)
+              .layoutWeight(1)
+              .height(38)
               // SaveButton（安全组件不可重构、不可被上层遮挡——遮挡后点击授权失效）：
               // 玻璃托盘垫底（z 序在下不遮挡），按钮本身走深色模式渲染深色底+蓝色字
               Stack() {

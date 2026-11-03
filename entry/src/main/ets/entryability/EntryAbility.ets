@@ -16,11 +16,15 @@
 import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
+import deviceInfo from '@ohos.deviceInfo';
+import { ExportNotify } from '../engine/ExportNotify';
 
 const DOMAIN = 0x0000;
 
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    // 供 ExportNotify 等模块取 UIAbilityContext（通知授权等 API 需该类型）
+    AppStorage.setOrCreate('abilityCtx', this.context);
     try {
       // 强制深色模式：应用整体深色风格，系统组件（ActionSheet/AlertDialog/picker）
       // 需同步深色背景浅色字体，与页面自定义深色样式一致
@@ -33,6 +37,8 @@ export default class EntryAbility extends UIAbility {
 
   onDestroy(): void {
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onDestroy');
+    // 兜底：销毁时停掉导出长时任务并撤下进度通知
+    ExportNotify.cleanup(this.context);
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
@@ -47,6 +53,15 @@ export default class EntryAbility extends UIAbility {
       hilog.info(DOMAIN, 'testTag', 'Succeeded in loading the content.');
       try {
         const win = windowStage.getMainWindowSync();
+        // 方向策略：手机锁竖屏（UI 为竖屏手机式布局）；平板/PC 解锁跟随系统旋转
+        // （module.json5 静态 portrait 为兜底，运行时按设备类型放开）
+        const dt = deviceInfo.deviceType;
+        if (dt === 'tablet' || dt === '2in1') {
+          win.setPreferredOrientation(window.Orientation.AUTO_ROTATION)
+            .catch((e: Object) => {
+              hilog.error(DOMAIN, 'testTag', 'unlock orientation failed: %{public}s', JSON.stringify(e));
+            });
+        }
         win.setWindowSystemBarProperties({
           statusBarColor: '#00000000',
           navigationBarColor: '#00000000',

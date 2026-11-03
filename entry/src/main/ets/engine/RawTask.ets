@@ -7,29 +7,60 @@
 import { taskpool } from '@kit.ArkTS';
 import { image } from '@kit.ImageKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { RawDecoder } from './RawDecoder';
 import { PixelScale } from './PixelScale';
 import { RawTaskResult } from './RawTypes';
 
+const RAW_TAG: string = 'RawDebug';
+
+/** taskpool 内诊断日志（解码链各失败点定位）。 */
+function rawLog(msg: string): void {
+  try {
+    hilog.info(0xD00, RAW_TAG, '%{public}s', msg);
+  } catch (e) {
+  }
+}
+
 @Concurrent
 async function decodeRawTask(path: string, threshold: number, maxEdge: number): Promise<RawTaskResult | undefined> {
+  const t0: number = Date.now();
+  // @Concurrent 内只能用局部变量：诊断日志用局部箭头（hilog 为顶层 import）
+  const log = (msg: string): void => {
+    try {
+      hilog.info(0xD00, 'RawDebug', '%{public}s', msg);
+    } catch (e) {
+    }
+  };
   // 1) 读文件字节（大 DNG 可达几十 MB，移出主线程）
   let bytes: Uint8Array;
-  const file = fs.openSync(path, fs.OpenMode.READ_ONLY);
+  let file: fs.File | undefined = undefined;
   try {
+    file = fs.openSync(path, fs.OpenMode.READ_ONLY);
     const size = fs.statSync(file.fd).size;
     if (size <= 0) {
+      log(`open ok but size=${size}`);
       return undefined;
     }
     const ab = new ArrayBuffer(size);
     fs.readSync(file.fd, ab);
     bytes = new Uint8Array(ab);
+    log(`read ok bytes=${size} in ${Date.now() - t0}ms`);
+  } catch (e) {
+    log(`open/read FAIL: ${e instanceof Error ? e.message : 'unknown'}`);
+    return undefined;
   } finally {
-    fs.closeSync(file);
+    if (file !== undefined) {
+      try {
+        fs.closeSync(file);
+      } catch (e) {
+      }
+    }
   }
   // 2) 厂商内嵌 JPEG 预览（色彩最准）：image kit 解码 + 紧密化
   try {
     const preview = RawDecoder.extractPreview(bytes);
+    log(`extractPreview -> ${preview === undefined ? 'undefined' : preview.byteLength + 'B'}`);
     if (preview !== undefined && preview.byteLength > 0) {
       const buf = new ArrayBuffer(preview.byteLength);
       new Uint8Array(buf).set(preview);
@@ -63,20 +94,26 @@ async function decodeRawTask(path: string, threshold: number, maxEdge: number): 
       }
       pm.release().catch(() => {
       });
+      log(`preview path ok ${tw}x${th} in ${Date.now() - t0}ms`);
       return new RawTaskResult(tight, tw, th);
     }
   } catch (e) {
+    log(`preview path FAIL: ${e instanceof Error ? e.message : 'unknown'}`);
   }
   // 3) LibRaw 全量解码回退：ARGB 数组 → RGBA → 盒式降采样
+  const t1: number = Date.now();
   const decoded = RawDecoder.decode(bytes, threshold);
   if (decoded === undefined || decoded.length < 3) {
+    log(`LibRaw decode FAIL (undefined/short) in ${Date.now() - t1}ms`);
     return undefined;
   }
   const sw = decoded[0];
   const sh = decoded[1];
   if (sw < 1 || sh < 1 || decoded.length < sw * sh + 2) {
+    log(`LibRaw decode invalid ${sw}x${sh} len=${decoded.length}`);
     return undefined;
   }
+  log(`LibRaw decode ok ${sw}x${sh} in ${Date.now() - t1}ms`);
   const fullBuf = new ArrayBuffer(sw * sh * 4);
   const full = new Uint8Array(fullBuf);
   for (let i = 0; i < sw * sh; i++) {
@@ -93,18 +130,41 @@ async function decodeRawTask(path: string, threshold: number, maxEdge: number): 
     const rgba = PixelScale.downscaleRgba(full, sw, sh, dw, dh);
     const outBuf = new ArrayBuffer(dw * dh * 4);
     new Uint8Array(outBuf).set(rgba);
+    log(`libraw path ok ${dw}x${dh} total ${Date.now() - t0}ms`);
     return new RawTaskResult(outBuf, dw, dh);
   }
+  log(`libraw path full ok ${sw}x${sh} total ${Date.now() - t0}ms`);
   return new RawTaskResult(fullBuf, sw, sh);
+}
+
+/** taskpool 跨线程反序列化会丢失类标识：仅按字段形状收窄后的原样载体。 */
+interface RawTaskOut {
+  rgba: ArrayBuffer;
+  width: number;
+  height: number;
 }
 
 /** UI 线程侧封装：派发任务并规整返回类型。 */
 export class RawTaskRunner {
   static async run(path: string, threshold: number, maxEdge: number): Promise<RawTaskResult | undefined> {
-    const out = await taskpool.execute(decodeRawTask, path, threshold, maxEdge);
-    if (out instanceof RawTaskResult) {
-      return out;
+    try {
+      const out = await taskpool.execute(decodeRawTask, path, threshold, maxEdge);
+      if (out === undefined || out === null) {
+        rawLog('task returned undefined (decode failed in worker)');
+        return undefined;
+      }
+      // 一次性形状收窄（类标识跨线程丢失，不能 instanceof）
+      const res = out as RawTaskOut;
+      if (res.rgba instanceof ArrayBuffer && typeof res.width === 'number' && typeof res.height === 'number'
+        && res.width > 0 && res.height > 0) {
+        rawLog(`task ok ${res.width}x${res.height} ${res.rgba.byteLength}B`);
+        return new RawTaskResult(res.rgba, res.width, res.height);
+      }
+      rawLog(`task returned invalid shape: rgba=${typeof res.rgba}`);
+      return undefined;
+    } catch (e) {
+      rawLog(`taskpool execute FAIL: ${e instanceof Error ? e.message : 'unknown'}`);
+      return undefined;
     }
-    return undefined;
   }
 }

@@ -15,6 +15,10 @@
     {
       "name": "app_camera_reason",
       "value": "拍摄照片用于编辑"
+    },
+    {
+      "name": "background_running_reason",
+      "value": "图片导出需要在后台继续处理"
     }
   ]
 }

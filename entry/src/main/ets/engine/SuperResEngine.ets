@@ -35,7 +35,8 @@ export class SuperResEngine {
   static readonly TILE: number = 256;
   static readonly OVERLAP: number = 16;
   static readonly SCALE: number = 2;
-  static readonly MAX_SAFE_INPUT_PIXELS: number = 512 * 512;
+  /** ×2 后输出须落在 12MP 安全帽内（SAFE_EXPORT_PIXELS/4）；分块+块间 yield 架构下大图安全。 */
+  static readonly MAX_SAFE_INPUT_PIXELS: number = 3 * 1024 * 1024;
   private static readonly models: Map<string, mindSporeLite.Model> = new Map();
   private static rm: resourceManager.ResourceManager | undefined = undefined;
 
@@ -79,7 +80,9 @@ export class SuperResEngine {
         }
         const out = new Float32Array(outputs[0].getData());
         const outHwc: boolean = outputs[0].shape.length === 4 && outputs[0].shape[3] === 3;
-        SuperResEngine.writeCenter(out, outHwc, xs[xi], ys[yi], width, height, ow, oh, result);
+        const nextX: number = xi + 1 < xs.length ? xs[xi + 1] : -1;
+        const nextY: number = yi + 1 < ys.length ? ys[yi + 1] : -1;
+        SuperResEngine.writeCenter(out, outHwc, xs[xi], ys[yi], nextX, nextY, width, height, ow, oh, result);
       }
     }
     return new SuperResImage(result, ow, oh);
@@ -189,13 +192,17 @@ export class SuperResEngine {
   }
 
   private static writeCenter(out: Float32Array, hwc: boolean, inputX: number, inputY: number,
+    nextX: number, nextY: number,
     inputWidth: number, inputHeight: number, width: number, height: number, result: Uint8Array): void {
     const tileOut: number = SuperResEngine.TILE * 2;
-    const crop: number = SuperResEngine.OVERLAP * 2;
-    const startX: number = inputX > 0 ? crop : 0;
-    const startY: number = inputY > 0 ? crop : 0;
-    const endX: number = inputX + SuperResEngine.TILE < inputWidth ? tileOut - crop : tileOut;
-    const endY: number = inputY + SuperResEngine.TILE < inputHeight ? tileOut - crop : tileOut;
+    const half: number = SuperResEngine.OVERLAP; // 重叠区对半分：各弃 8 输入像素/侧，接缝落在重叠区中部
+    // 修复黑色接缝：原实现块两侧各裁 crop=32，但块步长仅 480，块间留下 32px 未写黑缝
+    // （1600x1200 → 7x5 块 → 竖 5 条 / 横 3-4 条实测）。正确所有权：
+    // 非首块从半重叠后写起，非末块写到下一块半重叠起点，块间严格连续。
+    const startX: number = inputX > 0 ? half : 0;
+    const startY: number = inputY > 0 ? half : 0;
+    const endX: number = nextX >= 0 ? Math.min(tileOut, (nextX - inputX) * 2 + half) : tileOut;
+    const endY: number = nextY >= 0 ? Math.min(tileOut, (nextY - inputY) * 2 + half) : tileOut;
     const outputX: number = inputX * 2;
     const outputY: number = inputY * 2;
     for (let y = startY; y < endY; y++) {

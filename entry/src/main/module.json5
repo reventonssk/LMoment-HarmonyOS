@@ -21,6 +21,16 @@
           ],
           "when": "inuse"
         }
+      },
+      {
+        "name": "ohos.permission.KEEP_BACKGROUND_RUNNING",
+        "reason": "$string:background_running_reason",
+        "usedScene": {
+          "abilities": [
+            "EntryAbility"
+          ],
+          "when": "always"
+        }
       }
     ],
     "abilities": [
@@ -34,6 +44,9 @@
         "startWindowBackground": "$color:start_window_background",
         "orientation": "portrait",
         "exported": true,
+        "backgroundModes": [
+          "dataTransfer"
+        ],
         "skills": [
           {
             "entities": [
