@@ -137,6 +137,8 @@ export struct GlassButton {
       .fontColor(this.labelColor)
       .maxLines(1)
       .align(Alignment.Center)
+      // Text 同 Image 默认可拖拽，长按会触发系统拖拽抢占 Stack 的 LongPressGesture（分类弹窗），显式关闭
+      .draggable(false)
   }
 
   build() {

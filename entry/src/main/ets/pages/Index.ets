@@ -1105,6 +1105,7 @@ struct Index {
   }
 
   private toast(msg: string): void {
+    hilog.info(0x0000, 'LMoment', '[toast] %{public}s', msg);
     this.getUIContext().getPromptAction().showToast({ message: msg, duration: 2200 });
   }
 
@@ -2373,6 +2374,9 @@ struct Index {
           .height(72)
           .borderRadius(12)
           .objectFit(ImageFit.Cover)
+          // Image 默认 draggable=true，长按会触发系统拖拽识别并抢占，
+          // 导致卡片 LongPressGesture 菜单永远不弹（faqs-arkui-61），必须显式关闭
+          .draggable(false)
       } else {
         Column()
           .width(72)
@@ -2386,6 +2390,7 @@ struct Index {
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .constraintSize({ maxWidth: 76 })
+        .draggable(false)
     }
     .width(84)
     .padding({ top: 6, bottom: 6 })
@@ -2988,6 +2993,7 @@ struct Index {
               .objectFit(ImageFit.Contain)
               .width('100%')
               .height('100%')
+              .draggable(false)
               .gesture(LongPressGesture({ repeat: false, duration: 250 })
                 .onAction(() => {
                   this.comparing = true;
@@ -3000,6 +3006,7 @@ struct Index {
               .objectFit(ImageFit.Contain)
               .width('100%')
               .height('100%')
+              .draggable(false)
               .scale({ x: this.pvScale, y: this.pvScale })
               .translate({ x: this.pvOffX, y: this.pvOffY })
               .gesture(
@@ -3292,6 +3299,10 @@ struct Index {
           }
           .width('100%')
           .padding({ bottom: this.bottomInset })
+          // 玻璃面板内容区禁止触摸穿透：外层 wrapper 是 Transparent（让 Blank 区透传预览手势），
+          // 玻璃上的触摸若继续透传，预览 compare(250ms) 会在手势竞技场抢先于卡片/分类 chip
+          // 的 LongPress(350ms) 接受，长按菜单永远弹不出（真机同样中招）
+          .hitTestBehavior(HitTestMode.BLOCK_HIERARCHY)
         }
       }
       .width('100%')
