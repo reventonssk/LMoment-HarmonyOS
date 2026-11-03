@@ -11,6 +11,10 @@
     {
       "name": "EntryAbility_label",
       "value": "LMoment"
+    },
+    {
+      "name": "app_camera_reason",
+      "value": "拍摄照片用于编辑"
     }
   ]
 }
