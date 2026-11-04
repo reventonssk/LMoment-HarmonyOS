@@ -10,6 +10,7 @@ import { picker } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { cameraPicker, camera } from '@kit.CameraKit';
 import { common } from '@kit.AbilityKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { RawTaskRunner } from './RawTask';
 import { PixelScale } from './PixelScale';
 
@@ -19,12 +20,16 @@ export class DecodedImage {
   readonly height: number;
   /** 紧密排布 RGBA（w*h*4）。 */
   readonly data: Uint8Array;
+  /** RAW 路径：worker 内由 TIFF EXIF 重建的 APP1（导出时迁移）；undefined 表示无。 */
+  readonly exifApp1: Uint8Array | undefined;
 
-  constructor(pixelMap: image.PixelMap, width: number, height: number, data: Uint8Array) {
+  constructor(pixelMap: image.PixelMap, width: number, height: number, data: Uint8Array,
+    exifApp1?: Uint8Array) {
     this.pixelMap = pixelMap;
     this.width = width;
     this.height = height;
     this.data = data;
+    this.exifApp1 = exifApp1;
   }
 }
 
@@ -370,8 +375,11 @@ export class ImagePipeline {
         return undefined;
       }
       const px = new Uint8Array(r.rgba);
+      const tpm: number = Date.now();
       const pm = await ImagePipeline.rgbaToPixelMap(px, r.width, r.height);
-      return new DecodedImage(pm, r.width, r.height, px);
+      hilog.info(0x0000, 'RawExif', `raw pm wrap ${r.width}x${r.height} ${Date.now() - tpm}ms`);
+      const app1 = r.app1 !== null ? new Uint8Array(r.app1) : undefined;
+      return new DecodedImage(pm, r.width, r.height, px, app1);
     } catch (e) {
       return undefined;
     }

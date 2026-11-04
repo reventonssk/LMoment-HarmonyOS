@@ -1406,12 +1406,9 @@ struct Index {
         this.deleteCapturedFile();
         this.pickedUri = '';
         this.rawSourceUri = path;
-        // DNG 直拍：从 TIFF EXIF 重建 APP1（Make/Model/拍摄参数），导出时移植
-        const dngHead = ImagePipeline.readHead(path, 262144);
-        const dngApp1 = RawExif.extractApp1(dngHead,
-          (off: number, len: number): Uint8Array => ImagePipeline.readRange(path, off, len));
-        hilog.info(0x0000, 'RawExif', `capture dng head=${dngHead.length} app1=${dngApp1?.length ?? -1}`);
-        this.srcExifApp1 = dngApp1 !== undefined ? dngApp1 : new Uint8Array(0);
+        // DNG 直拍：APP1 已在解码 worker 内重建（同导入路径，避免主线程阻塞）
+        this.srcExifApp1 = d.exifApp1 !== undefined ? d.exifApp1 : new Uint8Array(0);
+        hilog.info(0x0000, 'RawExif', `capture dng app1=${this.srcExifApp1.length}`);
         await this.applyDecoded(d);
       } else {
         // JPEG 兜底（DNG 档意外产出 JPEG 时）：常规加载路径
@@ -1491,12 +1488,9 @@ struct Index {
       }
       this.pickedUri = '';
       this.rawSourceUri = uri;
-      // RAW：从 TIFF EXIF 重建 APP1（Make/Model/拍摄参数），导出时移植
-      const dngHead = ImagePipeline.readHead(uri, 262144);
-      const dngApp1 = RawExif.extractApp1(dngHead,
-        (off: number, len: number): Uint8Array => ImagePipeline.readRange(uri, off, len));
-      hilog.info(0x0000, 'RawExif', `pick dng head=${dngHead.length} app1=${dngApp1?.length ?? -1}`);
-      this.srcExifApp1 = dngApp1 !== undefined ? dngApp1 : new Uint8Array(0);
+      // RAW：APP1 已在解码 worker 内从 TIFF EXIF 重建（避免主线程全文件 XMP 扫描阻塞）
+      this.srcExifApp1 = d.exifApp1 !== undefined ? d.exifApp1 : new Uint8Array(0);
+      hilog.info(0x0000, 'RawExif', `pick dng app1=${this.srcExifApp1.length}`);
       await this.applyDecoded(d);
     } catch (e) {
       this.processing = false;

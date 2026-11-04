@@ -7,10 +7,13 @@ export class RawTaskResult {
   readonly rgba: ArrayBuffer;
   readonly width: number;
   readonly height: number;
+  /** 由 TIFF EXIF 重建的 APP1（含 GPS/XMP 兜底迁移结果）；null 表示无。 */
+  readonly app1: ArrayBuffer | null;
 
-  constructor(rgba: ArrayBuffer, width: number, height: number) {
+  constructor(rgba: ArrayBuffer, width: number, height: number, app1: ArrayBuffer | null) {
     this.rgba = rgba;
     this.width = width;
     this.height = height;
+    this.app1 = app1;
   }
 }

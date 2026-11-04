@@ -271,9 +271,18 @@ export class RawExif {
 
   private static findBytes(b: Uint8Array, needle: string, from: number, to: number): number {
     const n: number = needle.length;
-    for (let i = from; i + n <= to; i++) {
+    if (n <= 0) {
+      return -1;
+    }
+    // 首字节快速跳过：RAW 全文件分块扫描时逐位置进内层比较会慢一个量级
+    const c0: number = needle.charCodeAt(0) & 0xFF;
+    const end: number = to - n;
+    for (let i = from; i <= end; i++) {
+      if (b[i] !== c0) {
+        continue;
+      }
       let ok: boolean = true;
-      for (let k = 0; k < n; k++) {
+      for (let k = 1; k < n; k++) {
         if (b[i + k] !== (needle.charCodeAt(k) & 0xFF)) {
           ok = false;
           break;
@@ -499,6 +508,11 @@ export class RawExif {
   /** 在文件头（256KB）中扫描 XMP GPS；解析失败返回 undefined。 */
   private static parseXmpGps(head: Uint8Array): XmpGps | undefined {
     const limit: number = head.length;
+    // 便宜预筛：没有 'GPS' 字样的块不可能含 GPS 坐标，直接跳过后续多次逐字节长串搜索
+    // （25MB 无 XMP 的 DNG 全文件扫描曾达 10s）
+    if (RawExif.findBytes(head, 'GPS', 0, limit) < 0) {
+      return undefined;
+    }
     let latAt: number = RawExif.findTagNotRef(head, 'exif:GPSLatitude', limit);
     let lonAt: number = RawExif.findTagNotRef(head, 'exif:GPSLongitude', limit);
     if (latAt < 0 || lonAt < 0) {

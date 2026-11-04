@@ -11,6 +11,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { RawDecoder } from './RawDecoder';
 import { PixelScale } from './PixelScale';
 import { RawTaskResult } from './RawTypes';
+import { RawExif } from './RawExif';
 
 const RAW_TAG: string = 'RawDebug';
 
@@ -57,6 +58,27 @@ async function decodeRawTask(path: string, threshold: number, maxEdge: number): 
       }
     }
   }
+  // TIFF EXIF → APP1（含 GPS IFD / XMP 兜底迁移）。必须留在 worker 内：
+  // 无 XMP 的 DNG 会触发全文件分块扫描，主线程实测阻塞 10s → THREAD_BLOCK_6S 杀进程。
+  // 文件字节已在内存，readRange 直接切片，不再二次读盘。
+  let app1: ArrayBuffer | null = null;
+  try {
+    const headLen: number = Math.min(262144, bytes.byteLength);
+    const app1Bytes = RawExif.extractApp1(bytes.subarray(0, headLen),
+      (off: number, len: number): Uint8Array => {
+        const s: number = Math.max(0, Math.min(off, bytes.byteLength));
+        const e: number = Math.max(s, Math.min(off + len, bytes.byteLength));
+        return bytes.subarray(s, e);
+      });
+    if (app1Bytes !== undefined && app1Bytes.byteLength > 0) {
+      const buf = new ArrayBuffer(app1Bytes.byteLength);
+      new Uint8Array(buf).set(app1Bytes);
+      app1 = buf;
+    }
+    log(`app1 ${app1 === null ? 0 : app1.byteLength}B in ${Date.now() - t0}ms`);
+  } catch (e) {
+    log(`app1 FAIL: ${e instanceof Error ? e.message : 'unknown'}`);
+  }
   // 2) 厂商内嵌 JPEG 预览（色彩最准）：image kit 解码 + 紧密化
   try {
     const preview = RawDecoder.extractPreview(bytes);
@@ -95,7 +117,7 @@ async function decodeRawTask(path: string, threshold: number, maxEdge: number): 
       pm.release().catch(() => {
       });
       log(`preview path ok ${tw}x${th} in ${Date.now() - t0}ms`);
-      return new RawTaskResult(tight, tw, th);
+      return new RawTaskResult(tight, tw, th, app1);
     }
   } catch (e) {
     log(`preview path FAIL: ${e instanceof Error ? e.message : 'unknown'}`);
@@ -131,10 +153,10 @@ async function decodeRawTask(path: string, threshold: number, maxEdge: number): 
     const outBuf = new ArrayBuffer(dw * dh * 4);
     new Uint8Array(outBuf).set(rgba);
     log(`libraw path ok ${dw}x${dh} total ${Date.now() - t0}ms`);
-    return new RawTaskResult(outBuf, dw, dh);
+    return new RawTaskResult(outBuf, dw, dh, app1);
   }
   log(`libraw path full ok ${sw}x${sh} total ${Date.now() - t0}ms`);
-  return new RawTaskResult(fullBuf, sw, sh);
+  return new RawTaskResult(fullBuf, sw, sh, app1);
 }
 
 /** taskpool 跨线程反序列化会丢失类标识：仅按字段形状收窄后的原样载体。 */
@@ -142,6 +164,7 @@ interface RawTaskOut {
   rgba: ArrayBuffer;
   width: number;
   height: number;
+  app1: ArrayBuffer | null;
 }
 
 /** UI 线程侧封装：派发任务并规整返回类型。 */
@@ -158,7 +181,7 @@ export class RawTaskRunner {
       if (res.rgba instanceof ArrayBuffer && typeof res.width === 'number' && typeof res.height === 'number'
         && res.width > 0 && res.height > 0) {
         rawLog(`task ok ${res.width}x${res.height} ${res.rgba.byteLength}B`);
-        return new RawTaskResult(res.rgba, res.width, res.height);
+        return new RawTaskResult(res.rgba, res.width, res.height, res.app1);
       }
       rawLog(`task returned invalid shape: rgba=${typeof res.rgba}`);
       return undefined;
