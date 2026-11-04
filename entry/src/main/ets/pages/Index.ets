@@ -2991,7 +2991,11 @@ struct Index {
                 clickAction: (): void => {
                   this.pickRawAndLoad();
                 }
-              })            }
+              })
+            }
+            // 上移补偿：整屏居中会因底部玻璃栏(≈254vp)远高于顶栏(≈97vp)而偏下，
+            // 偏移后在顶栏与底部玻璃栏之间的可视区域居中
+            .offset({ y: -78 })
           } else if (this.comparing && this.origPM !== undefined) {
             Image(this.origPM)
               .objectFit(ImageFit.Contain)
