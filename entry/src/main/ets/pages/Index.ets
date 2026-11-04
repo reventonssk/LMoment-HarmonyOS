@@ -36,8 +36,9 @@ import { M9PerfectEngine, RgbaImg } from '../engine/M9PerfectEngine';
 import { ExportNotify } from '../engine/ExportNotify';
 import { yieldUI } from '../engine/PixAsync';
 import { GlassButton, GlassCanvas, GlassPanel, estimateTextWidth } from '../common/GlassPanel';
-import { ImmersiveStyle } from '../common/ImmersiveStyle';
 
+import { TouchGlow } from '../common/TouchGlow';
+import { ImmersiveStyle } from '../common/ImmersiveStyle';
 class ThumbEntry {
   readonly key: string;
   readonly label: string;
@@ -2947,14 +2948,23 @@ struct Index {
               Text('离线色彩风格引擎')
                 .fontSize(15)
                 .fontColor('#8A8A8A')
-              Button('选择照片')
-                .width(190)
-                .backgroundColor('#E8B84B')
-                .fontColor('#1A1A1A')
-                .fontSize(15)
-                .onClick(() => {
-                  this.pickAndLoad();
-                })
+              // 黄色主按钮：HDS 无材质路径，TouchGlow 偏白光晕 + 按压缩放
+              TouchGlow({
+                glowCenter: 'rgba(255,248,225,0.50)',
+                glowEdge: 'rgba(255,248,225,0)',
+                glowRadiusVp: 80,
+                cornerRadiusVp: 999,
+                pressScale: 0.96
+              }) {
+                Button('选择照片')
+                  .width(190)
+                  .backgroundColor('#E8B84B')
+                  .fontColor('#1A1A1A')
+                  .fontSize(15)
+                  .onClick(() => {
+                    this.pickAndLoad();
+                  })
+              }
               GlassButton({
                 label: '拍照',
                 buttonWidth: 190,
@@ -3103,45 +3113,85 @@ struct Index {
                     Text(this.selectedKey === '' ? '原图' : (this.findCustomOrDefLabel()))
                       .fontSize(12)
                       .fontColor('#8A8A8A')
-                    Text('换图')
-                      .fontSize(13)
-                      .fontColor('#E8B84B')
-                      .onClick(() => {
-                        this.returnHome();
-                      })
-                    Text(this.hdrEnabled ? 'HDR开' : 'HDR')
-                      .fontSize(13)
-                      .fontColor(this.hdrEnabled ? '#F2E6C9' : '#E8B84B')
-                      .onClick(() => {
-                        this.hdrEnabled = !this.hdrEnabled;
-                        SettingsStore.setHdrDefaultOn(this.hdrEnabled);
-                        this.renderTone();
-                      })
-                    Text(this.superResEnabled ? (this.superResMode === SuperResMode.FAST ? '超分快' : '超分质') : '超分')
-                      .fontSize(13)
-                      .fontColor(this.superResEnabled ? '#F2E6C9' : '#E8B84B')
-                      .onClick(() => {
-                        if (!this.superResEnabled) {
-                          this.superResEnabled = true;
-                          this.superResMode = SuperResMode.FAST;
-                        } else if (this.superResMode === SuperResMode.FAST) {
-                          this.superResMode = SuperResMode.QUALITY;
-                        } else {
-                          this.superResEnabled = false;
-                        }
-                      })
+                    TouchGlow({
+                      glowCenter: 'rgba(232,184,75,0.18)',
+                      glowEdge: 'rgba(232,184,75,0)',
+                      glowRadiusVp: 60,
+                      cornerRadiusVp: 999,
+                      pressScale: 0.92,
+                      padH: 6,
+                      padV: 4
+                    }) {
+                      Text('换图')
+                        .fontSize(13)
+                        .fontColor('#E8B84B')
+                        .onClick(() => {
+                          this.returnHome();
+                        })
+                    }
+                    TouchGlow({
+                      glowCenter: 'rgba(232,184,75,0.18)',
+                      glowEdge: 'rgba(232,184,75,0)',
+                      glowRadiusVp: 60,
+                      cornerRadiusVp: 999,
+                      pressScale: 0.92,
+                      padH: 6,
+                      padV: 4
+                    }) {
+                      Text(this.hdrEnabled ? 'HDR开' : 'HDR')
+                        .fontSize(13)
+                        .fontColor(this.hdrEnabled ? '#F2E6C9' : '#E8B84B')
+                        .onClick(() => {
+                          this.hdrEnabled = !this.hdrEnabled;
+                          SettingsStore.setHdrDefaultOn(this.hdrEnabled);
+                          this.renderTone();
+                        })
+                    }
+                    TouchGlow({
+                      glowCenter: 'rgba(232,184,75,0.18)',
+                      glowEdge: 'rgba(232,184,75,0)',
+                      glowRadiusVp: 60,
+                      cornerRadiusVp: 999,
+                      pressScale: 0.92,
+                      padH: 6,
+                      padV: 4
+                    }) {
+                      Text(this.superResEnabled ? (this.superResMode === SuperResMode.FAST ? '超分快' : '超分质') : '超分')
+                        .fontSize(13)
+                        .fontColor(this.superResEnabled ? '#F2E6C9' : '#E8B84B')
+                        .onClick(() => {
+                          if (!this.superResEnabled) {
+                            this.superResEnabled = true;
+                            this.superResMode = SuperResMode.FAST;
+                          } else if (this.superResMode === SuperResMode.FAST) {
+                            this.superResMode = SuperResMode.QUALITY;
+                          } else {
+                            this.superResEnabled = false;
+                          }
+                        })
+                    }
                   }
                 }
               }
               .scrollable(ScrollDirection.Horizontal)
               .scrollBar(BarState.Off)
               .constraintSize({ minWidth: 0, maxWidth: '72%' })
-              Text('设置')
-                .fontSize(13)
-                .fontColor('#E8B84B')
-                .onClick(() => {
-                  this.openSettings();
-                })
+              TouchGlow({
+                glowCenter: 'rgba(232,184,75,0.18)',
+                glowEdge: 'rgba(232,184,75,0)',
+                glowRadiusVp: 60,
+                cornerRadiusVp: 999,
+                pressScale: 0.92,
+                padH: 6,
+                padV: 4
+              }) {
+                Text('设置')
+                  .fontSize(13)
+                  .fontColor('#E8B84B')
+                  .onClick(() => {
+                    this.openSettings();
+                  })
+              }
             }
             .width('100%')
             .height(52)

@@ -9,6 +9,7 @@
 
 import { DividerMode, hdsMaterial, HdsTabs } from '@kit.UIDesignKit';
 import { ImmersiveStyle } from './ImmersiveStyle';
+import { TouchGlow } from './TouchGlow';
 
 /** 按字符宽度估算文本宽度（vp）：CJK/全角按 fontSize，其余按 0.6 倍。 */
 export function estimateTextWidth(label: string, fontSizeVp: number): number {
@@ -203,20 +204,29 @@ export struct GlassButton {
           this.longPressAction();
         }))
     } else {
-      Button(this.label)
-        .width(this.buttonWidth)
-        .height(this.buttonHeight)
-        .backgroundColor(this.selected ? '#E8B84B' : '#26262A')
-        .fontColor(this.selected ? '#1A1A1A' : this.labelColor)
-        .fontSize(this.labelSize)
-        .borderRadius(this.buttonHeight / 2)
-        .onClick((): void => {
-          this.clickAction();
-        })
-        .gesture(LongPressGesture({ repeat: false, duration: 350 })
-          .onAction((): void => {
-            this.longPressAction();
-          }))
+      // 降级路径：无 HDS 材质触摸光响应，用 TouchGlow 暖金光斑补齐反馈
+      TouchGlow({
+        glowCenter: 'rgba(232,184,75,0.30)',
+        glowEdge: 'rgba(232,184,75,0)',
+        glowRadiusVp: 70,
+        cornerRadiusVp: this.buttonHeight / 2,
+        pressScale: 0.96
+      }) {
+        Button(this.label)
+          .width(this.buttonWidth)
+          .height(this.buttonHeight)
+          .backgroundColor(this.selected ? '#E8B84B' : '#26262A')
+          .fontColor(this.selected ? '#1A1A1A' : this.labelColor)
+          .fontSize(this.labelSize)
+          .borderRadius(this.buttonHeight / 2)
+          .onClick((): void => {
+            this.clickAction();
+          })
+          .gesture(LongPressGesture({ repeat: false, duration: 350 })
+            .onAction((): void => {
+              this.longPressAction();
+            }))
+      }
     }
   }
 }
