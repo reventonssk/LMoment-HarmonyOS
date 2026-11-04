@@ -1,6 +1,7 @@
 ﻿/**
  * 设置页：原生 List + ListItemGroup 分组卡片；布尔项用 Toggle(Switch) 原生开关，
- * 多选项用 ActionSheet。行组件必须用 @Component + @Prop 而非 @Builder——
+ * 多选项用自定义底部弹层（bindSheet：行距可控、带选中态，替代系统 ActionSheet）。
+ * 行组件必须用 @Component + @Prop 而非 @Builder——
  * @Builder 多参数按值传递时状态变化不刷新内部 UI（官方文档规则）。
  * 已移除死设置「伪 16bit 线性」（管线未读取）与无操作占位行「超分档位」。
  */
@@ -10,6 +11,19 @@ import { StyleCategories } from '../engine/StyleDefs';
 import { InAppCapture } from '../engine/InAppCapture';
 import { ImmersiveLevel, ImmersiveStyle } from '../common/ImmersiveStyle';
 import { common } from '@kit.AbilityKit';
+
+/** 自定义底部弹层选项条目：label 显示、current 选中态（✓）、action 点击回调。 */
+class SheetOption {
+  label: string;
+  current: boolean;
+  action: () => void;
+
+  constructor(label: string, current: boolean, action: () => void) {
+    this.label = label;
+    this.current = current;
+    this.action = action;
+  }
+}
 
 /** 多选项行（点击弹 ActionSheet）。 */
 @Component
@@ -88,7 +102,7 @@ struct SwitchRow {
       .layoutWeight(1)
 
       Toggle({ type: ToggleType.Switch, isOn: this.isOn })
-        .selectedColor('#E8B84B')
+        .selectedColor(this.rowEnabled ? '#E8B84B' : '#5A5A5E')
         .hitTestBehavior(HitTestMode.None)
     }
     .width('100%')
@@ -126,6 +140,18 @@ struct SettingsPage {
   @State immersiveSupported: boolean = true;
   /** 主页全屏沉浸布局广播的状态栏高度（vp），标题栏避让用。 */
   @State topInset: number = 0;
+  /** 自定义底部弹层（替代系统 ActionSheet，解决选项行距过小）。 */
+  @State sheetVisible: boolean = false;
+  @State sheetTitle: string = '';
+  @State sheetMessage: string = '';
+  @State sheetOptions: SheetOption[] = [];
+
+  private openSheet(title: string, message: string, options: SheetOption[]): void {
+    this.sheetTitle = title;
+    this.sheetMessage = message;
+    this.sheetOptions = options;
+    this.sheetVisible = true;
+  }
 
   aboutToAppear(): void {
     const inset = AppStorage.get<number>('lmTopInset');
@@ -179,28 +205,19 @@ struct SettingsPage {
   }
 
   private pickDefault(): void {
-    const lastSheet: SheetInfo = {
-      title: '记忆上次（每次启动进入上次分类）',
-      action: () => {
+    const current = SettingsStore.defaultSetting();
+    const options: SheetOption[] = [
+      new SheetOption('记忆上次（每次启动进入上次分类）', current === SettingsStore.VALUE_LAST, () => {
         this.applyDefault(SettingsStore.VALUE_LAST);
-      }
-    };
-    const sheets: SheetInfo[] = [lastSheet];
+      })
+    ];
     for (let i = 0; i < StyleCategories.LIST.length; i++) {
       const cat = StyleCategories.LIST[i];
-      const sheet: SheetInfo = {
-        title: cat.title,
-        action: () => {
-          this.applyDefault(cat.id);
-        }
-      };
-      sheets.push(sheet);
+      options.push(new SheetOption(cat.title, current === cat.id, () => {
+        this.applyDefault(cat.id);
+      }));
     }
-    this.getUIContext().showActionSheet({
-      title: '默认分类',
-      message: '选择应用冷启动时进入的分类',
-      sheets: sheets
-    });
+    this.openSheet('默认分类', '选择应用冷启动时进入的分类', options);
   }
 
   private applyDefault(id: string): void {
@@ -218,23 +235,22 @@ struct SettingsPage {
   }
 
   private pickHdrBoost(): void {
-    const light: SheetInfo = { title: '轻（1.5EV）', action: () => {
-      SettingsStore.setHdrBoostLevel(0);
-      this.refresh();
-    } };
-    const standard: SheetInfo = { title: '标准（2.0EV）', action: () => {
-      SettingsStore.setHdrBoostLevel(1);
-      this.refresh();
-    } };
-    const strong: SheetInfo = { title: '强（2.5EV）', action: () => {
-      SettingsStore.setHdrBoostLevel(2);
-      this.refresh();
-    } };
-    this.getUIContext().showActionSheet({
-      title: 'HDR 强度',
-      message: '选择增益图幅度',
-      sheets: [light, standard, strong]
-    });
+    const lv = SettingsStore.hdrBoostLevel();
+    const options: SheetOption[] = [
+      new SheetOption('轻（1.5EV）', lv === 0, () => {
+        SettingsStore.setHdrBoostLevel(0);
+        this.refresh();
+      }),
+      new SheetOption('标准（2.0EV）', lv === 1, () => {
+        SettingsStore.setHdrBoostLevel(1);
+        this.refresh();
+      }),
+      new SheetOption('强（2.5EV）', lv === 2, () => {
+        SettingsStore.setHdrBoostLevel(2);
+        this.refresh();
+      })
+    ];
+    this.openSheet('HDR 强度', '选择增益图幅度', options);
   }
 
   private toggleHdrDefault(): void {
@@ -261,23 +277,22 @@ struct SettingsPage {
 
   /** RAW 亮度档：auto_bright 阈值三档（标准 0.01 / 提亮 0.03 / 强力提亮 0.04）。 */
   private pickRawLevel(): void {
-    const standard: SheetInfo = { title: '标准（0.01）', action: () => {
-      SettingsStore.setRawThrLevel(0);
-      this.refresh();
-    } };
-    const bright: SheetInfo = { title: '提亮（0.03）', action: () => {
-      SettingsStore.setRawThrLevel(1);
-      this.refresh();
-    } };
-    const strong: SheetInfo = { title: '强力提亮（0.04）', action: () => {
-      SettingsStore.setRawThrLevel(2);
-      this.refresh();
-    } };
-    this.getUIContext().showActionSheet({
-      title: 'RAW 亮度档',
-      message: 'RAW 解码 auto_bright 阈值（原图偏暗时可提亮）',
-      sheets: [standard, bright, strong]
-    });
+    const lv = SettingsStore.rawThrLevel();
+    const options: SheetOption[] = [
+      new SheetOption('标准（0.01）', lv === 0, () => {
+        SettingsStore.setRawThrLevel(0);
+        this.refresh();
+      }),
+      new SheetOption('提亮（0.03）', lv === 1, () => {
+        SettingsStore.setRawThrLevel(1);
+        this.refresh();
+      }),
+      new SheetOption('强力提亮（0.04）', lv === 2, () => {
+        SettingsStore.setRawThrLevel(2);
+        this.refresh();
+      })
+    ];
+    this.openSheet('RAW 亮度档', 'RAW 解码 auto_bright 阈值（原图偏暗时可提亮，导入时生效）', options);
   }
 
   private toggleLeicaBadge(): void {
@@ -292,57 +307,42 @@ struct SettingsPage {
 
   /** 应用内拍摄模式选择：auto（运行时探测回落链）/ off（直接系统相机）。 */
   private pickInappMode(): void {
-    const autoSheet: SheetInfo = {
-      title: 'auto（运行时探测：有 RAW 档则应用内直拍，否则系统相机）',
-      action: () => {
+    const options: SheetOption[] = [
+      new SheetOption('auto（运行时探测：有 RAW 档则应用内直拍，否则系统相机）', this.inappMode === 'auto', () => {
         SettingsStore.setInappCaptureMode('auto');
         this.refresh();
-      }
-    };
-    const offSheet: SheetInfo = {
-      title: 'off（直接系统相机）',
-      action: () => {
+      }),
+      new SheetOption('off（直接系统相机）', this.inappMode === 'off', () => {
         SettingsStore.setInappCaptureMode('off');
         this.refresh();
-      }
-    };
-    this.getUIContext().showActionSheet({
-      title: '应用内拍摄',
-      message: '当前设备探测：' + this.inappCapLabel
-        + '\n\n多数机型（含 nova 系列）不向第三方应用开放 RAW 拍摄档，'
-        + '此时 auto 与 off 均使用系统相机。\nRAW 工作流：系统相机 Pro 模式拍 DNG → 本应用「导入 RAW」',
-      sheets: [autoSheet, offSheet]
-    });
+      })
+    ];
+    this.openSheet('应用内拍摄', '当前设备探测：' + this.inappCapLabel
+      + '\n\n多数机型（含 nova 系列）不向第三方应用开放 RAW 拍摄档，'
+      + '此时 auto 与 off 均使用系统相机。\nRAW 工作流：系统相机 Pro 模式拍 DNG → 本应用「导入 RAW」', options);
   }
 
-  /** 沉浸光感四挡选择（ActionSheet；选择即广播生效并持久化）。 */
+  /** 沉浸光感四挡选择（自定义弹层；选择即广播生效并持久化）。 */
   private pickImmersiveLevel(): void {
-    const sheets: SheetInfo[] = [];
+    const options: SheetOption[] = [];
     const modes = ImmersiveStyle.allModes();
+    const cur = SettingsStore.immersiveLevel();
     for (let i = 0; i < modes.length; i++) {
       const mode = modes[i];
-      const sheet: SheetInfo = {
-        title: ImmersiveStyle.labelOf(mode) + '（' + ImmersiveStyle.descOf(mode) + '）',
-        action: () => {
+      options.push(new SheetOption(ImmersiveStyle.labelOf(mode) + '（' + ImmersiveStyle.descOf(mode) + '）',
+        mode === cur, () => {
           SettingsStore.setImmersiveLevel(mode);
           this.immersiveLabel = ImmersiveStyle.labelOf(mode);
-          if (mode === ImmersiveLevel.EXQUISITE || mode === ImmersiveLevel.GENTLE) {
-            if (!this.immersiveSupported) {
-              this.getUIContext().getPromptAction()
-                .showToast({ message: '当前设备暂不支持所选效果，已使用兼容效果' });
-            }
+          if ((mode === ImmersiveLevel.EXQUISITE || mode === ImmersiveLevel.GENTLE)
+            && !this.immersiveSupported) {
+            this.getUIContext().getPromptAction()
+              .showToast({ message: '当前设备暂不支持所选效果，已使用兼容效果' });
           }
-        }
-      };
-      sheets.push(sheet);
+        }));
     }
-    this.getUIContext().showActionSheet({
-      title: '沉浸光感',
-      message: this.immersiveSupported
-        ? '统一调整顶栏与底栏的玻璃材质表现'
-        : '当前设备不支持沉浸材质，已使用模糊兼容效果',
-      sheets: sheets
-    });
+    this.openSheet('沉浸光感', this.immersiveSupported
+      ? '统一调整顶栏与底栏的玻璃材质表现'
+      : '当前设备不支持沉浸材质，已使用模糊兼容效果', options);
   }
 
   @Builder
@@ -351,6 +351,68 @@ struct SettingsPage {
       .fontSize(12)
       .fontColor('#8A8A8A')
       .margin({ left: 6, top: 2, bottom: 2 })
+  }
+
+  /** 自定义底部弹层内容：标题 + 说明 + 宽行距选项列表（当前值 ✓ 金色高亮）。 */
+  @Builder
+  private sheetPanel() {
+    Column() {
+      Text(this.sheetTitle)
+        .fontSize(16)
+        .fontWeight(FontWeight.Medium)
+        .fontColor('#F2E6C9')
+        .margin({ top: 4 })
+      if (this.sheetMessage !== '') {
+        Text(this.sheetMessage)
+          .fontSize(12)
+          .fontColor('#8A8A8A')
+          .lineHeight(18)
+          .textAlign(TextAlign.Center)
+          .margin({ top: 8, bottom: 6 })
+          .padding({ left: 24, right: 24 })
+      }
+      Scroll() {
+        Column() {
+          ForEach(this.sheetOptions, (opt: SheetOption, idx: number) => {
+            Row() {
+              Text(opt.label)
+                .fontSize(15)
+                .fontColor(opt.current ? '#E8B84B' : '#EDEDED')
+                .layoutWeight(1)
+                .maxLines(2)
+              if (opt.current) {
+                Text('✓')
+                  .fontSize(15)
+                  .fontColor('#E8B84B')
+                  .margin({ left: 10 })
+              }
+            }
+            .width('100%')
+            .padding({ left: 20, right: 20, top: 17, bottom: 17 })
+            .alignItems(VerticalAlign.Center)
+            .onClick(() => {
+              this.sheetVisible = false;
+              opt.action();
+            })
+
+            if (idx < this.sheetOptions.length - 1) {
+              Divider()
+                .strokeWidth(1)
+                .color('#1C1C20')
+                .margin({ left: 20, right: 20 })
+            }
+          }, (opt: SheetOption, idx: number) => idx.toString())
+        }
+        .width('100%')
+      }
+      .constraintSize({ maxHeight: 560 })
+      .scrollBar(BarState.Off)
+      .align(Alignment.Center)
+    }
+    .width('100%')
+    .padding({ left: 14, right: 14, top: 10, bottom: 30 })
+    .backgroundColor('#16161A')
+    .alignItems(HorizontalAlign.Center)
   }
 
   build() {
@@ -419,8 +481,9 @@ struct SettingsPage {
               } })
           }
           ListItem() {
-            SwitchRow({ title: '徕卡徽章', hint: '导出照片右下角绘制 LEICA 水印（默认开）',
-              isOn: this.leicaBadge, rowEnabled: true,
+            SwitchRow({ title: '徕卡徽章', hint: '暂不可用：真机实测图库未显示 LEICA 角标，'
+              + '已停用徽章元数据写入（EXIF 迁移不受影响）',
+              isOn: false, rowEnabled: false,
               onToggle: (): void => {
                 this.toggleLeicaBadge();
               } })
@@ -447,7 +510,7 @@ struct SettingsPage {
         ListItemGroup({ header: this.groupLabel('导入与拍摄') }) {
           ListItem() {
             SettingRow({ title: 'RAW 亮度档', value: this.rawLevel,
-              hint: 'RAW 解码亮度：标准 0.01 / 提亮 0.03 / 强力提亮 0.04', rowEnabled: true,
+              hint: 'RAW 解码亮度：标准 0.01 / 提亮 0.03 / 强力提亮 0.04，重新导入时生效', rowEnabled: true,
               onTap: (): void => {
                 this.pickRawLevel();
               } })
@@ -505,5 +568,11 @@ struct SettingsPage {
     .padding({ top: this.topInset })
     .backgroundColor('#0E0E10')
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .bindSheet($$this.sheetVisible, this.sheetPanel(), {
+      height: SheetSize.FIT_CONTENT,
+      dragBar: true,
+      showClose: false,
+      backgroundColor: '#16161A'
+    })
   }
 }

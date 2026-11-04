@@ -12,6 +12,7 @@ import { RawDecoder } from './RawDecoder';
 import { PixelScale } from './PixelScale';
 import { RawTaskResult } from './RawTypes';
 import { RawExif } from './RawExif';
+import { AutoBright } from './AutoBright';
 
 const RAW_TAG: string = 'RawDebug';
 
@@ -116,7 +117,8 @@ async function decodeRawTask(path: string, threshold: number, maxEdge: number): 
       }
       pm.release().catch(() => {
       });
-      log(`preview path ok ${tw}x${th} in ${Date.now() - t0}ms`);
+      const boosted = AutoBright.preview(new Uint8Array(tight), tw, th, threshold);
+      log(`preview path ok ${tw}x${th} autoBright=${boosted}(${threshold}) in ${Date.now() - t0}ms`);
       return new RawTaskResult(tight, tw, th, app1);
     }
   } catch (e) {
