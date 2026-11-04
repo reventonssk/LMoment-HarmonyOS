@@ -214,17 +214,7 @@ struct SettingsPage {
   }
 
   private openAbout(): void {
-    this.getUIContext().showAlertDialog({
-      title: '关于',
-      message: 'L-Moment for HarmonyOS\n离线色彩风格引擎 · 对齐原版 1.4.1\n\n'
-        + '已启用：风格 / 八档调整（含柔光）/ 拍照 · 换图 / 设置',
-      autoCancel: true,
-      confirm: {
-        value: '确定',
-        action: () => {
-        }
-      }
-    });
+    this.getUIContext().getRouter().pushUrl({ url: 'pages/AboutPage' });
   }
 
   private pickHdrBoost(): void {
