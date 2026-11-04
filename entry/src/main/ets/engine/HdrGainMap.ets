@@ -1,3 +1,6 @@
+import { image } from '@kit.ImageKit';
+import { colorSpaceManager } from '@kit.ArkGraphics2D';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ImagePipeline } from './ImagePipeline';
 import { yieldUI } from './PixAsync';
 
@@ -201,6 +204,244 @@ export class HdrGainMap {
       pm.release().catch(() => {
       });
     }
+  }
+
+  /**
+   * 系统编解码 HDR 路径（ISO 21496-1 双层 JPEG）：
+   * 主图 PixelMap + GAINMAP 辅助图 + HdrGainmapMetadata → ImagePacker 编码，
+   * 再把源 EXIF APP1 插回 SOI 后，并同步修补 MPF 中附属图的绝对偏移。
+   * 图库/媒体库按增益图元数据走 HDR 渲染（旧手写 Ultra HDR 容器按 SDR 显示）。
+   * 失败返回 undefined，调用方回退手写容器路径。
+   */
+  static async synthSystemHdr(rgba: Uint8Array, width: number, height: number, level: number,
+    srcApp1?: Uint8Array): Promise<Uint8Array | undefined> {
+    if (width < 1 || height < 1 || rgba.length < width * height * 4) {
+      return undefined;
+    }
+    const maxEv: number = level === 2 ? 2.5 : (level === 1 ? 2.0 : 1.5);
+    const scale: number = Math.min(1, 512 / Math.max(width, height));
+    const gw: number = Math.max(1, Math.round(width * scale));
+    const gh: number = Math.max(1, Math.round(height * scale));
+    // createAuxiliaryPicture 仅收 BGRA 连续像素；灰度增益图 B=G=R=v
+    const bgra: Uint8Array = new Uint8Array(gw * gh * 4);
+    for (let y = 0; y < gh; y++) {
+      if ((y & 15) === 0) {
+        await yieldUI();
+      }
+      const sy: number = Math.min(height - 1, Math.floor(y / scale));
+      for (let x = 0; x < gw; x++) {
+        const sx: number = Math.min(width - 1, Math.floor(x / scale));
+        const si: number = (sy * width + sx) * 4;
+        const lum: number = (0.2126 * rgba[si] + 0.7152 * rgba[si + 1] + 0.0722 * rgba[si + 2]) / 255;
+        const t: number = Math.max(0, Math.min(1, (lum - 0.68) / 0.32));
+        const shaped: number = t * t * (3 - 2 * t);
+        const value: number = Math.round(255 * Math.min(1, shaped * maxEv / (maxEv + 1.0)));
+        const gi: number = (y * gw + x) * 4;
+        bgra[gi] = value;
+        bgra[gi + 1] = value;
+        bgra[gi + 2] = value;
+        bgra[gi + 3] = 255;
+      }
+    }
+    let mainPm: image.PixelMap | undefined = undefined;
+    let picture: image.Picture | undefined = undefined;
+    let aux: image.AuxiliaryPicture | undefined = undefined;
+    let packer: image.ImagePacker | undefined = undefined;
+    let step: string = 'gainmap-fill';
+    try {
+      // 主图也必须是 DMA（getHdrComposedPixelmap 的约束同样适用于编码路径：
+      // "MainPixelMap's allocator type is not DMA" 会 7600201，且 packer 会静默丢增益图）。
+      const mainBuf: ArrayBuffer = new ArrayBuffer(width * height * 4);
+      new Uint8Array(mainBuf).set(rgba.subarray(0, width * height * 4));
+      const mainOpts: image.InitializationOptions = {
+        size: { width: width, height: height },
+        srcPixelFormat: image.PixelMapFormat.RGBA_8888,
+        pixelFormat: image.PixelMapFormat.RGBA_8888,
+        editable: false
+      };
+      step = 'createMainPixelmap(DMA)';
+      mainPm = await image.createPixelMapUsingAllocator(mainBuf, mainOpts, image.AllocatorType.DMA);
+      step = 'createPicture';
+      picture = image.createPicture(mainPm);
+      // setMetadata(HDR_GAINMAP_METADATA) 只支持 DMA 内存（62980173），
+      // 故必须用 createAuxiliaryPictureUsingAllocator 显式申请 DMA，不能用共享内存的 createAuxiliaryPicture。
+      const auxInfo: image.AuxiliaryPictureInfo = {
+        auxiliaryPictureType: image.AuxiliaryPictureType.GAINMAP,
+        size: { width: gw, height: gh },
+        rowStride: gw * 4,
+        pixelFormat: image.PixelMapFormat.RGBA_8888,
+        colorSpace: colorSpaceManager.create(colorSpaceManager.ColorSpace.SRGB)
+      };
+      step = 'createAuxiliaryPicture(DMA)';
+      aux = image.createAuxiliaryPictureUsingAllocator(auxInfo, image.AllocatorType.DMA, bgra.buffer);
+      step = 'setAuxiliaryPicture';
+      picture.setAuxiliaryPicture(image.AuxiliaryPictureType.GAINMAP, aux);
+      const gainPm: image.PixelMap | null = picture.getGainmapPixelmap();
+      if (gainPm === null) {
+        hilog.warn(0xF100, 'HdrSys', 'gainmap pixelmap null');
+        return undefined;
+      }
+      const chan: image.GainmapChannel = {
+        gainmapMax: maxEv,
+        gainmapMin: 0.0,
+        gamma: 1.0,
+        baseOffset: 0.015625,
+        alternateOffset: 0.015625
+      };
+      const meta: image.HdrGainmapMetadata = {
+        writerVersion: 0,
+        miniVersion: 0,
+        gainmapChannelCount: 1,
+        useBaseColorFlag: true,
+        baseHeadroom: 1.0,
+        alternateHeadroom: Math.pow(2, maxEv),
+        channels: [chan]
+      };
+      step = 'setMetadata';
+      await gainPm.setMetadata(image.HdrMetadataKey.HDR_GAINMAP_METADATA, meta);
+      packer = image.createImagePacker();
+      step = 'packing';
+      // desiredDynamicRange 默认 SDR 会丢掉增益图；AUTO 按内容编码（含 GAINMAP 辅助图）。
+      const packed: ArrayBuffer = await packer.packing(picture, {
+        format: 'image/jpeg',
+        quality: 95,
+        needsPackProperties: true,
+        desiredDynamicRange: image.PackingDynamicRange.AUTO
+      });
+      const sys: Uint8Array = new Uint8Array(packed);
+      hilog.info(0xF100, 'HdrSys',
+        'sys pack ok %{public}d bytes gainmap=%{public}dx%{public}d maxEv=%{public}s',
+        sys.length, gw, gh, maxEv.toFixed(1));
+      const out: Uint8Array = HdrGainMap.patchExifMpf(sys, srcApp1);
+      HdrGainMap.logStructure(out);
+      return out;
+    } catch (e) {
+      hilog.warn(0xF100, 'HdrSys', 'sys hdr failed at %{public}s: %{public}s', step, `${e}`);
+      return undefined;
+    } finally {
+      if (packer !== undefined) {
+        packer.release().catch(() => {
+        });
+      }
+      if (picture !== undefined) {
+        picture.release();
+      }
+      if (aux !== undefined) {
+        aux.release();
+      }
+      if (mainPm !== undefined) {
+        mainPm.release().catch(() => {
+        });
+      }
+    }
+  }
+
+  /** 扫描最终 JPEG 结构并打日志：SOI 数、第二图像起点、MPF/ISO-21496-1/Exif 段位置。 */
+  private static logStructure(j: Uint8Array): void {
+    let secondSoi: number = -1;
+    let mpfAt: number = -1;
+    let isoAt: number = -1;
+    let exifAt: number = -1;
+    for (let i = 0; i + 8 < j.length; i++) {
+      if (secondSoi < 0 && i > 0 && j[i] === 0xFF && j[i + 1] === 0xD8) {
+        secondSoi = i;
+      }
+      if (mpfAt < 0 && j[i] === 0x4D && j[i + 1] === 0x50 && j[i + 2] === 0x46 && j[i + 3] === 0x00) {
+        mpfAt = i;
+      }
+      if (isoAt < 0 && j[i] === 0x75 && j[i + 1] === 0x72 && j[i + 2] === 0x6E && j[i + 3] === 0x3A &&
+        j[i + 4] === 0x69 && j[i + 5] === 0x73 && j[i + 6] === 0x6F) {
+        isoAt = i;
+      }
+      if (exifAt < 0 && j[i] === 0x45 && j[i + 1] === 0x78 && j[i + 2] === 0x69 && j[i + 3] === 0x66 &&
+        j[i + 4] === 0x00) {
+        exifAt = i;
+      }
+    }
+    hilog.info(0xF100, 'HdrSys',
+      'jpeg struct len=%{public}d soi2=%{public}d mpf=%{public}d iso=%{public}d exif=%{public}d',
+      j.length, secondSoi, mpfAt, isoAt, exifAt);
+  }
+
+  /** 系统双层 JPEG：SOI 后插入源 EXIF APP1；插入前先把 MPF 附属图绝对偏移 +delta。 */
+  private static patchExifMpf(jpeg: Uint8Array, app1?: Uint8Array): Uint8Array {
+    if (app1 === undefined || app1.length < 4 || app1[0] !== 0xFF || app1[1] !== 0xE1) {
+      return jpeg;
+    }
+    const patched: Uint8Array = HdrGainMap.patchMpfOffsets(jpeg, app1.length);
+    const out: Uint8Array = new Uint8Array(patched.length + app1.length);
+    out.set(patched.subarray(0, 2), 0);
+    out.set(app1, 2);
+    out.set(patched.subarray(2), 2 + app1.length);
+    return out;
+  }
+
+  /** 定位主图 APP2 "MPF\0" 段，把 MP Entry 中第 2 张起的图像数据绝对偏移加 delta。 */
+  private static patchMpfOffsets(jpeg: Uint8Array, delta: number): Uint8Array {
+    let payloadAt: number = -1;
+    let pos: number = 2;
+    while (pos + 4 <= jpeg.length && jpeg[pos] === 0xFF) {
+      const marker: number = jpeg[pos + 1];
+      if (marker === 0xDA || marker === 0xD9) {
+        break;
+      }
+      if (marker === 0xD8 || (marker >= 0xD0 && marker <= 0xD7) || marker === 0x01) {
+        pos += 2;
+        continue;
+      }
+      const len: number = HdrGainMap.u16(jpeg, pos + 2, true);
+      if (len < 2 || pos + 2 + len > jpeg.length) {
+        break;
+      }
+      if (marker === 0xE2 && len >= 12 &&
+        HdrGainMap.matchAt(jpeg, pos + 4, HdrGainMap.ascii('MPF\u0000'))) {
+        payloadAt = pos + 4;
+        break;
+      }
+      pos += 2 + len;
+    }
+    if (payloadAt < 0) {
+      return jpeg;
+    }
+    const tiff: number = payloadAt + 4;
+    const le: boolean = jpeg[tiff] === 0x49 && jpeg[tiff + 1] === 0x49;
+    if (!le && !(jpeg[tiff] === 0x4D && jpeg[tiff + 1] === 0x4D)) {
+      return jpeg;
+    }
+    const ifd: number = tiff + HdrGainMap.u32(jpeg, tiff + 4, le);
+    if (ifd < 0 || ifd + 2 > jpeg.length) {
+      return jpeg;
+    }
+    const count: number = HdrGainMap.u16(jpeg, ifd, le);
+    let entriesAt: number = -1;
+    let entryCount: number = 0;
+    let p: number = ifd + 2;
+    for (let i = 0; i < count; i++) {
+      if (p + 12 > jpeg.length) {
+        return jpeg;
+      }
+      if (HdrGainMap.u16(jpeg, p, le) === 0xB002) {
+        entryCount = HdrGainMap.u32(jpeg, p + 4, le);
+        entriesAt = tiff + HdrGainMap.u32(jpeg, p + 8, le);
+        break;
+      }
+      p += 12;
+    }
+    if (entriesAt < 0 || entryCount < 1) {
+      return jpeg;
+    }
+    const out: Uint8Array = jpeg.slice();
+    for (let i = 1; i < entryCount; i++) {
+      const e: number = entriesAt + i * 16 + 8;
+      if (e + 4 > out.length) {
+        break;
+      }
+      const v: number = HdrGainMap.u32(out, e, le);
+      if (v > 0) {
+        HdrGainMap.putValue(out, e, v + delta, 4, le);
+      }
+    }
+    return out;
   }
 
   static applyPreview(rgba: Uint8Array, width: number, height: number, level: number): Uint8Array {
@@ -501,6 +742,13 @@ export class HdrGainMap {
     dst[at + 1] = (value >>> 16) & 0xFF;
     dst[at + 2] = (value >>> 8) & 0xFF;
     dst[at + 3] = value & 0xFF;
+  }
+
+  private static putValue(b: Uint8Array, off: number, v: number, len: number, le: boolean): void {
+    for (let i = 0; i < len; i++) {
+      const k: number = le ? i : len - 1 - i;
+      b[k + off] = (v >>> (i * 8)) & 0xFF;
+    }
   }
 
   private static ascii(value: string): Uint8Array {

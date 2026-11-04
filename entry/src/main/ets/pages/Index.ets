@@ -2081,8 +2081,9 @@ struct Index {
       this.exportStage(84, '正在编码');
       const jpeg = await ImagePipeline.packJpeg(exportPm, 95);
       // 徽章收口先于 HDR 回嵌：mark 剥离 XMP/MPF/ISO 复合容器并移植源图 EXIF，
-      // 必须在增益图写入前执行；徽章 = EXIF 私有 tag + FFE4 段（原版口径，无像素水印）。
-      const marked = LeicaMark.mark(jpeg, this.srcExifApp1, SettingsStore.leicaBadgeEnabled());
+      // 必须在增益图写入前执行。徽章写入真机实测图库无 LEICA 角标显示（2026-11-04），
+      // 暂时禁用：保留 EXIF 迁移与容器剥离，仅停写 EXIF 私有 tag + FFE4 段。
+      const marked = LeicaMark.mark(jpeg, this.srcExifApp1, false);
       const finApp1 = LeicaMark.extractApp1(marked);
       if (finApp1 !== undefined) {
         hilog.info(0x0000, 'RawExif',
@@ -2091,9 +2092,17 @@ struct Index {
       let finalJpeg: Uint8Array = marked;
       if (this.hdrEnabled) {
         this.exportStage(90, '正在合成HDR增益图');
-        const hdr = await HdrGainMap.synthFromRgba(out, w, h, SettingsStore.hdrBoostLevel());
-        if (hdr !== undefined) {
-          finalJpeg = HdrGainMap.embed(marked, hdr);
+        // 系统编解码路径（ISO 21496-1）：图库按增益图渲染 HDR；
+        // 失败回退手写 Ultra HDR 容器（旧路径，图库按 SDR 显示）。
+        const sysHdr = await HdrGainMap.synthSystemHdr(out, w, h,
+          SettingsStore.hdrBoostLevel(), finApp1);
+        if (sysHdr !== undefined) {
+          finalJpeg = sysHdr;
+        } else {
+          const hdr = await HdrGainMap.synthFromRgba(out, w, h, SettingsStore.hdrBoostLevel());
+          if (hdr !== undefined) {
+            finalJpeg = HdrGainMap.embed(marked, hdr);
+          }
         }
       } else {
         finalJpeg = HdrGainMap.truncateToPrimary(marked);
