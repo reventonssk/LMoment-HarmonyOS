@@ -288,6 +288,9 @@ export class HdrGainMap {
         baseOffset: 0.015625,
         alternateOffset: 0.015625
       };
+      // channels 长度必须为 3（R/G/B 各一项，napi 逐通道解析；
+      // 只给 1 项会 "parse gainmapMax failed" ×2，元数据被拒，
+      // 编码器写出 static:0 的空 ISO 段，图库按 SDR 显示）。
       const meta: image.HdrGainmapMetadata = {
         writerVersion: 0,
         miniVersion: 0,
@@ -295,7 +298,7 @@ export class HdrGainMap {
         useBaseColorFlag: true,
         baseHeadroom: 1.0,
         alternateHeadroom: Math.pow(2, maxEv),
-        channels: [chan]
+        channels: [chan, chan, chan]
       };
       step = 'setMetadata';
       await gainPm.setMetadata(image.HdrMetadataKey.HDR_GAINMAP_METADATA, meta);
@@ -313,8 +316,11 @@ export class HdrGainMap {
         'sys pack ok %{public}d bytes gainmap=%{public}dx%{public}d maxEv=%{public}s',
         sys.length, gw, gh, maxEv.toFixed(1));
       const out: Uint8Array = HdrGainMap.patchExifMpf(sys, srcApp1);
-      HdrGainMap.logStructure(out);
-      return out;
+      const fixed: Uint8Array = HdrGainMap.patchItut35Eoi(out);
+      HdrGainMap.logStructure(fixed);
+      await HdrGainMap.verifySystemDecode(sys, 'pre');
+      await HdrGainMap.verifySystemDecode(fixed, 'post');
+      return fixed;
     } catch (e) {
       hilog.warn(0xF100, 'HdrSys', 'sys hdr failed at %{public}s: %{public}s', step, `${e}`);
       return undefined;
@@ -442,6 +448,106 @@ export class HdrGainMap {
       }
     }
     return out;
+  }
+
+  /**
+   * 修正主图 APP8 ITT35 内的两个偏移：系统 ImagePacker 写出的值指向错误位置
+   * （实测指向增益图 JPEG 内部），导致依赖它定位增益图的解码路径失败。
+   * 参照系统相机 HDR 样张语义：v1 = 主图 EOI 偏移，v2 = EOI-46。
+   */
+  private static patchItut35Eoi(jpeg: Uint8Array): Uint8Array {
+    let soi2: number = -1;
+    for (let i = 1; i + 1 < jpeg.length; i++) {
+      if (jpeg[i] === 0xFF && jpeg[i + 1] === 0xD8) {
+        soi2 = i;
+        break;
+      }
+    }
+    if (soi2 < 2) {
+      return jpeg;
+    }
+    const eoi: number = soi2 - 2;
+    let pos: number = 2;
+    while (pos + 4 <= jpeg.length) {
+      if (jpeg[pos] !== 0xFF) {
+        break;
+      }
+      const marker: number = jpeg[pos + 1];
+      if (marker === 0xDA) {
+        break;
+      }
+      if (marker === 0xD8 || (marker >= 0xD0 && marker <= 0xD7) || marker === 0x01) {
+        pos += 2;
+        continue;
+      }
+      const len: number = HdrGainMap.u16(jpeg, pos + 2, true);
+      if (len < 2 || pos + 2 + len > jpeg.length) {
+        break;
+      }
+      if (marker === 0xE8 && len >= 26 &&
+        HdrGainMap.matchAt(jpeg, pos + 4, HdrGainMap.ascii('ITUT35'))) {
+        const payload: number = pos + 4;
+        if (payload + 24 > jpeg.length) {
+          return jpeg;
+        }
+        const out: Uint8Array = jpeg.slice();
+        const v1: number = eoi;
+        const v2: number = eoi >= 46 ? eoi - 46 : 0;
+        out[payload + 17] = (v1 >> 16) & 0xFF;
+        out[payload + 18] = (v1 >> 8) & 0xFF;
+        out[payload + 19] = v1 & 0xFF;
+        out[payload + 21] = (v2 >> 16) & 0xFF;
+        out[payload + 22] = (v2 >> 8) & 0xFF;
+        out[payload + 23] = v2 & 0xFF;
+        hilog.info(0xF100, 'HdrSys', 'itt35 eoi patched v1=%{public}d v2=%{public}d', v1, v2);
+        return out;
+      }
+      pos += 2 + len;
+    }
+    return jpeg;
+  }
+
+  /**
+   * 导出自检：用系统 Picture API 解码导出 JPEG，确认增益图与增益图元数据
+   * 能被系统解码器读到（图库/媒体库走同一解码框架）。仅记日志，不影响导出。
+   */
+  private static async verifySystemDecode(out: Uint8Array, label: string): Promise<void> {
+    let src: image.ImageSource | undefined = undefined;
+    let pic: image.Picture | undefined = undefined;
+    try {
+      const ab: ArrayBuffer = out.buffer.slice(out.byteOffset, out.byteOffset + out.length);
+      src = image.createImageSource(ab);
+      const opts: image.DecodingOptionsForPicture = {
+        desiredAuxiliaryPictures: [image.AuxiliaryPictureType.GAINMAP]
+      };
+      pic = await src.createPicture(opts);
+      if (pic === undefined) {
+        hilog.warn(0xF100, 'HdrVfy', '%{public}s createPicture undefined', label);
+        return;
+      }
+      const gm: image.PixelMap | null = pic.getGainmapPixelmap();
+      const aux: image.AuxiliaryPicture | null = pic.getAuxiliaryPicture(image.AuxiliaryPictureType.GAINMAP);
+      hilog.info(0xF100, 'HdrVfy', '%{public}s decode len=%{public}d gainmapPm=%{public}s aux=%{public}s',
+        label, out.length, `${gm !== null}`, `${aux !== null}`);
+      if (gm !== null) {
+        const info: image.ImageInfo = await gm.getImageInfo();
+        const metaVal: image.HdrMetadataValue = gm.getMetadata(image.HdrMetadataKey.HDR_GAINMAP_METADATA);
+        hilog.info(0xF100, 'HdrVfy', '%{public}s gainmap %{public}dx%{public}d meta=%{public}s',
+          label, info.size.width, info.size.height, JSON.stringify(metaVal));
+      }
+      if (aux !== null) {
+        aux.release();
+      }
+    } catch (e) {
+      hilog.warn(0xF100, 'HdrVfy', '%{public}s verify failed: %{public}s', label, `${e}`);
+    } finally {
+      if (pic !== undefined) {
+        pic.release();
+      }
+      if (src !== undefined) {
+        await src.release();
+      }
+    }
   }
 
   static applyPreview(rgba: Uint8Array, width: number, height: number, level: number): Uint8Array {
