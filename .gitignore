@@ -1,4 +1,4 @@
-/node_modules
+﻿/node_modules
 /oh_modules
 /local.properties
 /.idea
@@ -20,3 +20,12 @@
 /pili-ref
 /zhihu-ref
 /dfx-reports
+
+# APK ��Դģ�ͣ����ϴ�����ʷ����������ر������ڹ�����
+/entry/src/main/resources/rawfile/m9fb_*.ms
+/entry/src/main/resources/rawfile/leica_filter_param_*.bin
+/entry/src/main/resources/rawfile/seplut_fivek.ms
+/entry/src/main/resources/rawfile/swinir_s_x2.ms
+/entry/src/main/resources/rawfile/fast_span_x2.ms
+/IMG_*.jpg
+/IMG_*.heic
