@@ -1937,6 +1937,37 @@ struct Index {
       def.mode === StyleMode.MODEL_M10R;
   }
 
+  /** 构造导出文件名：源文件名_LM_时分秒，与源文件区分；无源名时回退 LMoment_日期。 */
+  private buildExportTitle(): string {
+    const uri = this.pickedUri !== '' ? this.pickedUri : this.rawSourceUri;
+    let stem = '';
+    if (uri !== '') {
+      const slash = uri.lastIndexOf('/');
+      let name = slash >= 0 ? uri.substring(slash + 1) : uri;
+      try {
+        name = decodeURIComponent(name);
+      } catch (e) {
+      }
+      const dot = name.lastIndexOf('.');
+      stem = dot > 0 ? name.substring(0, dot) : name;
+    }
+    const now = new Date();
+    const p2 = (v: number): string => v < 10 ? `0${v}` : `${v}`;
+    const time = `${p2(now.getHours())}${p2(now.getMinutes())}${p2(now.getSeconds())}`;
+    if (stem === '') {
+      stem = `LMoment_${now.getFullYear()}${p2(now.getMonth() + 1)}${p2(now.getDate())}`;
+    }
+    let cleaned = '';
+    for (let i = 0; i < stem.length; i++) {
+      const ch = stem.charAt(i);
+      cleaned += '\\/:*?"\'`<>|{}[]'.indexOf(ch) >= 0 ? '_' : ch;
+    }
+    if (cleaned.length > 100) {
+      cleaned = cleaned.substring(0, 100);
+    }
+    return `${cleaned}_LM_${time}`;
+  }
+
   private async doExport(): Promise<void> {
     if (!this.hasImage) {
       this.toast('请先加载图片');
@@ -1955,7 +1986,9 @@ struct Index {
     let target: string = '';
     let exportPm: image.PixelMap | undefined = undefined;
     try {
-      target = await ImagePipeline.createAssetTarget(c, 'jpg');
+      // SaveButton 授权窗口（1分钟）内先创建相册资产：title 定显示文件名（图库实测
+      // displayName=title.jpg，见 Photo/5470=IMG_3528_LM_140141），写入不受时限约束。
+      target = await ImagePipeline.createAssetTarget(c, 'jpg', this.buildExportTitle());
       let src: Uint8Array;
       let w: number;
       let h: number;

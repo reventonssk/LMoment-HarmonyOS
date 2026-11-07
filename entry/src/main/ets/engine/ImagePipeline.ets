@@ -5,8 +5,7 @@
  */
 
 import { image } from '@kit.ImageKit';
-import { fileIo as fs } from '@kit.CoreFileKit';
-import { picker } from '@kit.CoreFileKit';
+import { fileIo as fs, picker } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { cameraPicker, camera } from '@kit.CameraKit';
 import { common } from '@kit.AbilityKit';
@@ -300,9 +299,14 @@ export class ImagePipeline {
     }
   }
 
-  /** 在 SaveButton 授权窗口内立即创建相册资产，返回可写 URI。 */
-  static async createAssetTarget(context: common.Context, ext: string): Promise<string> {
+  /** 在 SaveButton 授权窗口内立即创建相册资产，返回可写 URI；title 指定文件名（不含扩展名）。 */
+  static async createAssetTarget(context: common.Context, ext: string, title?: string): Promise<string> {
     const helper = photoAccessHelper.getPhotoAccessHelper(context);
+    if (title !== undefined && title !== '') {
+      hilog.info(0xF100, 'leicamoments', 'createAsset title=%{public}s', title);
+      const opts: photoAccessHelper.CreateOptions = { title: title };
+      return helper.createAsset(photoAccessHelper.PhotoType.IMAGE, ext, opts);
+    }
     return helper.createAsset(photoAccessHelper.PhotoType.IMAGE, ext);
   }
 
