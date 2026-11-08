@@ -109,7 +109,8 @@ struct AboutPage {
               + '拍照 · 换图 · RAW 导入（DNG）\n'
               + 'HDR · 超分 · 完美档管线\n'
               + '我的色彩 · 模型增强 · 版本历史\n'
-              + '徕卡徽章 · EXIF 迁移 · 后台导出 · 全像素导出')
+              + 'EXIF 迁移 · 后台导出 · 通知栏取消导出 · 全像素导出\n'
+              + '徕卡徽章（暂不可用：图库不显示 LEICA 角标，已停用写入）')
               .fontSize(12)
               .fontColor('#B9B9BD')
               .textAlign(TextAlign.Center)
