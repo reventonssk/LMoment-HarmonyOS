@@ -35,6 +35,18 @@ export default class EntryAbility extends UIAbility {
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
   }
 
+  onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    // 通知栏"停止"按钮：wantAgent.START_ABILITY 携带 stopExport 参数回到本 Ability
+    const p = want.parameters;
+    if (p !== undefined) {
+      const v = p['stopExport'];
+      if (v === 'true' || v === true) {
+        hilog.info(DOMAIN, 'testTag', 'stop export requested via notification');
+        ExportNotify.requestStop();
+      }
+    }
+  }
+
   onDestroy(): void {
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onDestroy');
     // 兜底：销毁时停掉导出长时任务并撤下进度通知

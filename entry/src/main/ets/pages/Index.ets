@@ -10,6 +10,7 @@ import { fileIo as fs } from '@kit.CoreFileKit';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { window } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { fileManagerService } from '@kit.FileManagerServiceKit';
 import { StyleDef, StyleDefs, StyleMode, StyleCategory, StyleCategories } from '../engine/StyleDefs';
 import { StyleEngine } from '../engine/StyleEngine';
 import { Lut3D } from '../engine/Lut3D';
@@ -33,7 +34,7 @@ import { LeicaMark } from '../engine/LeicaMark';
 import { RawExif } from '../engine/RawExif';
 import { ColorBackup, ColorBackupItem } from '../engine/ColorBackup';
 import { M9PerfectEngine, RgbaImg } from '../engine/M9PerfectEngine';
-import { ExportNotify } from '../engine/ExportNotify';
+import { ExportNotify, ExportCancelledError } from '../engine/ExportNotify';
 import { yieldUI } from '../engine/PixAsync';
 import { GlassButton, GlassCanvas, GlassPanel, estimateTextWidth } from '../common/GlassPanel';
 
@@ -1898,6 +1899,26 @@ struct Index {
     ExportNotify.progress(pct, label);
   }
 
+  /** 通知栏"停止"取消检查：命中即抛出，由 doExport catch 统一收口。 */
+  private checkExportCancel(): void {
+    if (ExportNotify.isStopRequested()) {
+      throw new ExportCancelledError();
+    }
+  }
+
+  /** 取消清理：SaveButton 窗口内已建的空相册资产移入回收站（失败静默保留）。 */
+  private async removeCancelledAsset(target: string): Promise<void> {
+    if (target === '') {
+      return;
+    }
+    try {
+      await fileManagerService.deleteToTrash(target);
+      hilog.info(0xF100, 'leicamoments', 'cancelled export asset moved to trash: %{public}s', target);
+    } catch (err) {
+      hilog.warn(0xF100, 'leicamoments', 'deleteToTrash failed: %{public}s', JSON.stringify(err));
+    }
+  }
+
   /**
    * 导出源解码：full_res_export 开启且（拟用尺寸的）像素在安全预算内 → 原分辨率；
    * M9 系 + m9_hires_export → 长边上限 8192；否则沿用 3072/2304 工作口径。
@@ -2019,6 +2040,7 @@ struct Index {
         w = this.origW;
         h = this.origH;
       }
+      this.checkExportCancel();
       this.exportStage(10, '正在解码原图');
       this.exportStage(15, '正在应用风格');
       const key = this.selectedKey;
@@ -2090,6 +2112,7 @@ struct Index {
             lutBin, saBin, this.levels);
         }
       }
+      this.checkExportCancel();
       this.exportStage(58, '风格处理完成');
       const canRunSuperRes: boolean = this.superResEnabled;
       const safeSuperRes: boolean = canRunSuperRes &&
@@ -2110,6 +2133,7 @@ struct Index {
           this.toast('当前图像较大，超分已降级为普通导出');
         }
       }
+      this.checkExportCancel();
       exportPm = await ImagePipeline.rgbaToPixelMap(out, w, h);
       this.exportStage(84, '正在编码');
       const jpeg = await ImagePipeline.packJpeg(exportPm, 95);
@@ -2123,6 +2147,7 @@ struct Index {
           `mark final ${RawExif.diagnose(finApp1)} | src ${RawExif.diagnose(this.srcExifApp1)}`);
       }
       let finalJpeg: Uint8Array = marked;
+      this.checkExportCancel();
       if (this.hdrEnabled) {
         this.exportStage(90, '正在合成HDR增益图');
         // 系统编解码路径（ISO 21496-1）：图库按增益图渲染 HDR；
@@ -2140,6 +2165,7 @@ struct Index {
       } else {
         finalJpeg = HdrGainMap.truncateToPrimary(marked);
       }
+      this.checkExportCancel();
       this.exportStage(95, '正在写入图库');
       hilog.info(0xF100, 'leicamoments', 'export dims %{public}dx%{public}d srcRes=%{public}s',
         w, h, this.pickedUri !== '' ? 'picked' : 'test');
@@ -2156,9 +2182,15 @@ struct Index {
         });
         exportPm = undefined;
       }
-      const msg = e instanceof Error ? e.message : '未知错误';
-      await ExportNotify.finish(c, false, '导出失败：' + msg);
-      this.toast('导出失败：' + msg);
+      if (e instanceof ExportCancelledError) {
+        await this.removeCancelledAsset(target);
+        await ExportNotify.finishCancelled(c);
+        this.toast('已取消导出');
+      } else {
+        const msg = e instanceof Error ? e.message : '未知错误';
+        await ExportNotify.finish(c, false, '导出失败：' + msg);
+        this.toast('导出失败：' + msg);
+      }
     }
     this.exporting = false;
   }

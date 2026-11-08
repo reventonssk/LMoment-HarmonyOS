@@ -1,11 +1,13 @@
 /**
  * 导出后台保障：DATA_TRANSFER 长时任务防止切后台/锁屏时进程冻结，
- * downloadTemplate 进度条通知实时反馈导出进度，完成/失败以文本通知收口。
- * 通知未授权或长时任务申请失败时静默降级，不影响导出主流程。
+ * downloadTemplate 进度条通知实时反馈导出进度（附"停止"按钮，经 wantAgent
+ * 携带 stopExport 参数回到 EntryAbility.onNewWant 置取消标志），
+ * 完成/失败/取消以文本通知收口。通知未授权或长时任务申请失败时静默降级，
+ * 不影响导出主流程。
  */
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { notificationManager } from '@kit.NotificationKit';
-import { common, wantAgent } from '@kit.AbilityKit';
+import { common, wantAgent, WantAgent } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
@@ -14,11 +16,34 @@ const TAG = 'leicamoments';
 const NOTIFY_ID = 1001;
 const MIN_INTERVAL_MS = 600;
 
+/** 导出被用户取消（通知栏"停止"按钮），doExport 各阶段边界抛出统一收口。 */
+export class ExportCancelledError extends Error {
+  constructor() {
+    super('导出已取消');
+  }
+}
+
 export class ExportNotify {
   private static running: boolean = false;
   private static lastTs: number = 0;
   private static lastPct: number = -1;
   private static notifyAsked: boolean = false;
+  private static stopFlag: boolean = false;
+  private static stopAgent: WantAgent | undefined = undefined;
+
+  /** 通知栏"停止"按钮经 onNewWant 调用：置位取消标志。 */
+  static requestStop(): void {
+    ExportNotify.stopFlag = true;
+    hilog.info(DOMAIN, TAG, 'export stop requested');
+  }
+
+  static isStopRequested(): boolean {
+    return ExportNotify.stopFlag;
+  }
+
+  static resetStop(): void {
+    ExportNotify.stopFlag = false;
+  }
 
   /** 首次导出前请求通知授权（系统对话框仅弹一次，不阻塞导出）。 */
   static prepare(): void {
@@ -39,12 +64,32 @@ export class ExportNotify {
       });
   }
 
-  /** 导出开始：启动长时任务 + 发布 0% 进度通知。 */
+  /** 导出开始：启动长时任务 + 发布 0% 进度通知（含"停止"按钮）。 */
   static async begin(ctx: common.Context): Promise<void> {
     ExportNotify.prepare();
     ExportNotify.running = true;
     ExportNotify.lastTs = 0;
     ExportNotify.lastPct = -1;
+    ExportNotify.resetStop();
+    try {
+      const stopInfo: wantAgent.WantAgentInfo = {
+        wants: [
+          {
+            bundleName: 'com.leicamoments.app',
+            abilityName: 'EntryAbility',
+            parameters: { 'stopExport': 'true' }
+          }
+        ],
+        operationType: wantAgent.OperationType.START_ABILITY,
+        requestCode: 1,
+        wantAgentFlags: [wantAgent.WantAgentFlags.UPDATE_PRESENT_FLAG]
+      };
+      ExportNotify.stopAgent = await wantAgent.getWantAgent(stopInfo);
+    } catch (err) {
+      // 停止按钮不可用时仍正常导出，仅无按钮
+      ExportNotify.stopAgent = undefined;
+      hilog.warn(DOMAIN, TAG, 'build stop wantAgent failed: %{public}s', JSON.stringify(err));
+    }
     try {
       const info: wantAgent.WantAgentInfo = {
         wants: [
@@ -94,6 +139,18 @@ export class ExportNotify {
     ExportNotify.publishText(title, msg);
   }
 
+  /** 取消收口：停长时任务，进度通知替换为取消文本通知。 */
+  static async finishCancelled(ctx: common.Context): Promise<void> {
+    ExportNotify.running = false;
+    ExportNotify.resetStop();
+    try {
+      await backgroundTaskManager.stopBackgroundRunning(ctx);
+    } catch (err) {
+      hilog.warn(DOMAIN, TAG, 'stopBackgroundRunning failed: %{public}s', JSON.stringify(err));
+    }
+    ExportNotify.publishText('导出已取消', '本次导出已停止');
+  }
+
   /** 兜底清理（Ability 销毁）：停长时任务并撤下进度通知。 */
   static cleanup(ctx: common.Context): void {
     backgroundTaskManager.stopBackgroundRunning(ctx).catch(() => {
@@ -102,12 +159,9 @@ export class ExportNotify {
     });
   }
 
+  // 普通文本通知 + actionButtons（downloadTemplate 模板通知不渲染自定义按钮，
+  // nova 14 Pro 实测面板无"停止"节点；普通通知附按钮 + 文本承载进度百分比）。
   private static publishProgress(pct: number, label: string): void {
-    const data: Record<string, Object> = {
-      'title': 'LMoment 导出',
-      'fileName': label,
-      'progressValue': pct
-    };
     const req: notificationManager.NotificationRequest = {
       id: NOTIFY_ID,
       notificationSlotType: notificationManager.SlotType.SERVICE_INFORMATION,
@@ -118,12 +172,16 @@ export class ExportNotify {
           text: label,
           additionalText: `${pct}%`
         }
-      },
-      template: {
-        name: 'downloadTemplate',
-        data: data
       }
     };
+    if (ExportNotify.stopAgent !== undefined) {
+      req.actionButtons = [
+        {
+          title: '停止',
+          wantAgent: ExportNotify.stopAgent
+        }
+      ];
+    }
     notificationManager.publish(req)
       .then(() => {
         ExportNotify.lastTs = Date.now();
