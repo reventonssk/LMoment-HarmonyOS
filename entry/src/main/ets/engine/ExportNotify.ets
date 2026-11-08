@@ -161,10 +161,13 @@ export class ExportNotify {
 
   // 普通文本通知 + actionButtons（downloadTemplate 模板通知不渲染自定义按钮，
   // nova 14 Pro 实测面板无"停止"节点；普通通知附按钮 + 文本承载进度百分比）。
+  // isAlertOnce: 进度更新只首次发布时提醒，后续同 id 更新降为 LEVEL_LOW，
+  // 不再触发震动/响铃（修复导出期间每次进度更新都震动的问题）。
   private static publishProgress(pct: number, label: string): void {
     const req: notificationManager.NotificationRequest = {
       id: NOTIFY_ID,
       notificationSlotType: notificationManager.SlotType.SERVICE_INFORMATION,
+      isAlertOnce: true,
       content: {
         notificationContentType: notificationManager.ContentType.NOTIFICATION_CONTENT_BASIC_TEXT,
         normal: {
