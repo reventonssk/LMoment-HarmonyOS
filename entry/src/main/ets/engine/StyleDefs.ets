@@ -97,6 +97,23 @@ export class StyleDefs {
     StyleMode.LUT, 'lut_kodak_100.bin', 0.10, 0.38, false);
   static readonly KC64: StyleDef = new StyleDef('KC64', 'K64', '浓红反转 · 实黑', 'kodak',
     StyleMode.LUT, 'lut_kodak_64.bin', 0.13, 0.50, false);
+  // H 色彩家族（HNCS 式自然还原，LUT 查表 + 极轻颗粒/暗角）
+  static readonly HN: StyleDef = new StyleDef('HN', 'H·自然', '自然还原 · 通透', 'hassel',
+    StyleMode.LUT, 'lut_hassel_hn.bin', 0.09, 0.45, false);
+  static readonly HB: StyleDef = new StyleDef('HB', 'H·蓝', '天空深青 · 层次', 'hassel',
+    StyleMode.LUT, 'lut_hassel_hb.bin', 0.08, 0.55, false);
+  static readonly HG: StyleDef = new StyleDef('HG', 'H·绿', '橄榄绿植 · 不荧光', 'hassel',
+    StyleMode.LUT, 'lut_hassel_hg.bin', 0.10, 0.45, false);
+  static readonly HP: StyleDef = new StyleDef('HP', 'H·人像', '肤色金黄 · 柔调', 'hassel',
+    StyleMode.LUT, 'lut_hassel_hp.bin', 0.07, 0.40, false);
+  static readonly HW: StyleDef = new StyleDef('HW', 'H·暖阳', '黄昏金调 · 浓郁', 'hassel',
+    StyleMode.LUT, 'lut_hassel_hw.bin', 0.14, 0.70, false);
+  static readonly HS: StyleDef = new StyleDef('HS', 'H·灰', '低饱和 · 高级灰', 'hassel',
+    StyleMode.LUT, 'lut_hassel_hs.bin', 0.14, 0.40, false);
+  static readonly HM: StyleDef = new StyleDef('HM', 'H·黑白', '平滑灰阶 · 干净', 'hassel',
+    StyleMode.LUT, 'lut_hassel_hm.bin', 0.14, 0.50, false);
+  static readonly HC: StyleDef = new StyleDef('HC', 'H·冷调', '青灰冷调 · 通透', 'hassel',
+    StyleMode.LUT, 'lut_hassel_hc.bin', 0.07, 0.38, false);
   static readonly SA: StyleDef = new StyleDef('SA', 'Style A', '闭式拟合 · 参考图直算', 'arri',
     StyleMode.SA, 'styleA_s0.bin', 0, 0, false);
 
@@ -104,6 +121,8 @@ export class StyleDefs {
   static readonly ALL: StyleDef[] = [
     StyleDefs.M3, StyleDefs.M9, StyleDefs.M9P, StyleDefs.M10R, StyleDefs.M4,
     StyleDefs.A709, StyleDefs.REVEAL, StyleDefs.DUNE, StyleDefs.LALALAND, StyleDefs.JOKER,
+    StyleDefs.HN, StyleDefs.HB, StyleDefs.HG, StyleDefs.HP, StyleDefs.HW,
+    StyleDefs.HS, StyleDefs.HM, StyleDefs.HC,
     StyleDefs.M13, StyleDefs.CCDP, StyleDefs.CCDW, StyleDefs.LP9, StyleDefs.LM9, StyleDefs.M9D,
     StyleDefs.FCHROME, StyleDefs.FCNEG, StyleDefs.FNN, StyleDefs.FPNH, StyleDefs.FACROS,
     StyleDefs.KP400, StyleDefs.KG200, StyleDefs.KE100, StyleDefs.KC64
@@ -146,6 +165,7 @@ export class StyleCategories {
     new StyleCategory('all', 'L-Moment'),
     new StyleCategory('leica', '一瞬 M'),
     new StyleCategory('arri', 'ARRI'),
+    new StyleCategory('hassel', 'H 色彩'),
     new StyleCategory('ccd', 'CCD'),
     new StyleCategory('fuji', 'F 胶片'),
     new StyleCategory('kodak', 'K 胶片'),

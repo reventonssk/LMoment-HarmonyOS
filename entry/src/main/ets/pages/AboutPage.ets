@@ -89,7 +89,7 @@ struct AboutPage {
             .fontWeight(FontWeight.Bold)
             .fontColor('#F2E6C9')
             .margin({ top: 14 })
-          Text('for HarmonyOS · 1.4.1（对齐原版 1.4.1）')
+          Text('for HarmonyOS · 1.5.0（对齐原版 1.5.0）')
             .fontSize(12)
             .fontColor('#8A8A8A')
             .margin({ top: 4 })

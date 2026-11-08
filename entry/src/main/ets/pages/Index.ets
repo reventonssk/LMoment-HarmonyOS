@@ -26,6 +26,7 @@ import { McPool } from '../engine/McPool';
 import { StyleCandidates, StyleCandidateResult } from '../engine/StyleCandidates';
 import { NeuralEngine } from '../engine/NeuralEngine';
 import { SettingsStore } from '../engine/SettingsStore';
+import { ExifTimes } from '../engine/ExifTimes';
 import { HdrGainMap } from '../engine/HdrGainMap';
 import { SuperResEngine, SuperResMode } from '../engine/SuperResEngine';
 import { InAppCapture } from '../engine/InAppCapture';
@@ -35,11 +36,15 @@ import { RawExif } from '../engine/RawExif';
 import { ColorBackup, ColorBackupItem } from '../engine/ColorBackup';
 import { M9PerfectEngine, RgbaImg } from '../engine/M9PerfectEngine';
 import { ExportNotify, ExportCancelledError } from '../engine/ExportNotify';
+import { BatchItem, BatchRecipe } from '../engine/BatchSession';
 import { yieldUI } from '../engine/PixAsync';
 import { GlassButton, GlassCanvas, GlassPanel, estimateTextWidth } from '../common/GlassPanel';
 
 import { TouchGlow } from '../common/TouchGlow';
 import { ImmersiveStyle } from '../common/ImmersiveStyle';
+
+/** 批量多图会话上限（与上游 MAX_BATCH 一致）。 */
+const MAX_BATCH: number = 30;
 class ThumbEntry {
   readonly key: string;
   readonly label: string;
@@ -160,6 +165,15 @@ struct Index {
   @State cameraBusy: boolean = false;
   /** 色调重绘进行中（轻量非阻断提示，区别于全屏 processing 遮罩）。 */
   @State rendering: boolean = false;
+  /** 批量多图会话（v1.5.0 移植）：仅一张时不进会话。 */
+  private batchItems: BatchItem[] = [];
+  private batchIndex: number = -1;
+  private batchRecipe: BatchRecipe = new BatchRecipe();
+  @State batchCount: number = 0;
+  @State batchLabel: string = '';
+  /** 批量导出：遮罩文本与整体进度。 */
+  @State batchExporting: boolean = false;
+  @State batchProgressText: string = '';
 
   private origBuf: Uint8Array = new Uint8Array(0);
   private origW: number = 0;
@@ -1282,14 +1296,87 @@ struct Index {
 
   private async pickAndLoad(): Promise<void> {
     try {
-      const uri = await ImagePipeline.pickImage();
-      if (uri === '') {
+      const uris = await ImagePipeline.pickImages(MAX_BATCH);
+      if (uris.length === 0) {
         return;
       }
-      await this.loadFromUri(uri);
+      if (uris.length === 1) {
+        this.clearBatch();
+        await this.loadFromUri(uris[0]);
+        return;
+      }
+      await this.beginBatch(uris);
     } catch (e) {
       this.toast('选择照片失败');
     }
+  }
+
+  // ---- 批量多图会话（v1.5.0 移植）----
+
+  private clearBatch(): void {
+    this.batchItems = [];
+    this.batchIndex = -1;
+    this.batchRecipe = new BatchRecipe();
+    this.batchCount = 0;
+    this.batchLabel = '';
+  }
+
+  private async beginBatch(uris: string[]): Promise<void> {
+    this.clearBatch();
+    for (let i = 0; i < uris.length; i++) {
+      this.batchItems.push(new BatchItem(uris[i]));
+    }
+    this.batchIndex = 0;
+    this.batchCount = uris.length;
+    this.batchLabel = `1 / ${uris.length}`;
+    await this.loadFromUri(uris[0]);
+  }
+
+  /** 把活动图的轻状态冻结进会话条目（切图/批量导出前调用）。 */
+  private snapshotActive(): void {
+    if (this.batchIndex < 0 || this.batchIndex >= this.batchItems.length) {
+      return;
+    }
+    const it = this.batchItems[this.batchIndex];
+    it.styleKey = this.selectedKey;
+    for (let i = 0; i < it.levels.length && i < this.levels.length; i++) {
+      it.levels[i] = this.levels[i];
+    }
+    it.hdrOn = this.hdrEnabled;
+    it.superResOn = this.superResEnabled;
+    if (it.hasSettings()) {
+      it.touched = true;
+      this.batchRecipe.capture(it.styleKey, this.levels, it.hdrOn, it.superResOn);
+    }
+  }
+
+  /** 还原会话条目状态到界面（loadFromUri 之后调用）：未调整项跟随配方，预览即导出。 */
+  private applySessionState(it: BatchItem): void {
+    if (!it.touched && !this.batchRecipe.isEmpty()) {
+      it.applyRecipe(this.batchRecipe);
+    }
+    this.hdrEnabled = it.hdrOn;
+    this.superResEnabled = it.superResOn;
+    for (let i = 0; i < this.levels.length && i < it.levels.length; i++) {
+      this.levels[i] = it.levels[i];
+    }
+    if (it.styleKey !== '') {
+      this.selectStyle(it.styleKey);
+    } else {
+      this.renderTone();
+    }
+  }
+
+  private async switchBatch(delta: number): Promise<void> {
+    if (this.batchItems.length < 2 || this.processing || this.exporting || this.modelBusy) {
+      return;
+    }
+    this.snapshotActive();
+    this.batchIndex = (this.batchIndex + delta + this.batchItems.length) % this.batchItems.length;
+    const it = this.batchItems[this.batchIndex];
+    this.batchLabel = `${this.batchIndex + 1} / ${this.batchItems.length}`;
+    await this.loadFromUri(it.uri);
+    this.applySessionState(it);
   }
 
   private async takeAndLoad(): Promise<void> {
@@ -1305,6 +1392,7 @@ struct Index {
       if (uri === '') {
         return;
       }
+      this.clearBatch();
       await this.loadFromUri(uri);
     } catch (e) {
       this.toast('拍照不可用');
@@ -1482,6 +1570,7 @@ struct Index {
         this.processing = false;
         return;
       }
+      this.clearBatch();
       const d = await ImagePipeline.decodeRaw(uri, SettingsStore.rawThr(), ImagePipeline.PREVIEW_EDGE);
       if (d === undefined) {
         this.processing = false;
@@ -1502,6 +1591,7 @@ struct Index {
 
   private async loadTestImage(): Promise<void> {
     this.processing = true;
+    this.clearBatch();
     try {
       const d = await ImagePipeline.makeTestImage(1600, 1200);
       this.pickedUri = '';
@@ -1555,6 +1645,7 @@ struct Index {
 
   /** 返回首页：释放当前图与派生缓存，恢复初始选图界面（顶部「换图」入口）。 */
   private returnHome(): void {
+    this.clearBatch();
     if (this.toneTimer >= 0) {
       clearTimeout(this.toneTimer);
       this.toneTimer = -1;
@@ -1958,9 +2049,8 @@ struct Index {
       def.mode === StyleMode.MODEL_M10R;
   }
 
-  /** 构造导出文件名：源文件名_LM_时分秒，与源文件区分；无源名时回退 LMoment_日期。 */
-  private buildExportTitle(): string {
-    const uri = this.pickedUri !== '' ? this.pickedUri : this.rawSourceUri;
+  /** 从 uri 提取并清洗导出文件名主干：非法字符替换、超长截断；无源名回退 LMoment_日期。 */
+  private exportStemOf(uri: string): string {
     let stem = '';
     if (uri !== '') {
       const slash = uri.lastIndexOf('/');
@@ -1974,7 +2064,6 @@ struct Index {
     }
     const now = new Date();
     const p2 = (v: number): string => v < 10 ? `0${v}` : `${v}`;
-    const time = `${p2(now.getHours())}${p2(now.getMinutes())}${p2(now.getSeconds())}`;
     if (stem === '') {
       stem = `LMoment_${now.getFullYear()}${p2(now.getMonth() + 1)}${p2(now.getDate())}`;
     }
@@ -1986,30 +2075,55 @@ struct Index {
     if (cleaned.length > 100) {
       cleaned = cleaned.substring(0, 100);
     }
-    return `${cleaned}_LM_${time}`;
+    return cleaned;
   }
 
-  private async doExport(): Promise<void> {
+  /** 导出时刻时分秒标签（HHmmss）。 */
+  private timeTag(): string {
+    const now = new Date();
+    const p2 = (v: number): string => v < 10 ? `0${v}` : `${v}`;
+    return `${p2(now.getHours())}${p2(now.getMinutes())}${p2(now.getSeconds())}`;
+  }
+
+  /** 构造导出文件名：源文件名_LM_时分秒，与源文件区分。 */
+  private buildExportTitle(): string {
+    const uri = this.pickedUri !== '' ? this.pickedUri : this.rawSourceUri;
+    return `${this.exportStemOf(uri)}_LM_${this.timeTag()}`;
+  }
+
+  /**
+   * 单张导出。targetOverride/silent 供批量导出循环复用：批量模式下目标资产已由
+   * 循环在 SaveButton 窗口内预建，通知与收尾由循环统一管理，异常（含取消）原样上抛。
+   */
+  private async doExport(targetOverride?: string, silent?: boolean): Promise<boolean> {
+    const batchMode: boolean = silent === true;
     if (!this.hasImage) {
-      this.toast('请先加载图片');
-      return;
+      if (!batchMode) {
+        this.toast('请先加载图片');
+      }
+      return false;
     }
-    if (this.exporting) {
-      return;
+    if (this.exporting && !batchMode) {
+      return false;
     }
     const c = this.ctx();
     if (c === undefined) {
-      return;
+      return false;
     }
-    this.exporting = true;
-    this.exportProgress = 0;
-    await ExportNotify.begin(c);
+    if (!batchMode) {
+      this.exporting = true;
+      this.exportProgress = 0;
+      await ExportNotify.begin(c);
+    }
     let target: string = '';
     let exportPm: image.PixelMap | undefined = undefined;
     try {
       // SaveButton 授权窗口（1分钟）内先创建相册资产：title 定显示文件名（图库实测
       // displayName=title.jpg，见 Photo/5470=IMG_3528_LM_140141），写入不受时限约束。
-      target = await ImagePipeline.createAssetTarget(c, 'jpg', this.buildExportTitle());
+      // 批量模式：目标由循环预先建好，直接使用。
+      target = targetOverride !== undefined && targetOverride !== ''
+        ? targetOverride
+        : await ImagePipeline.createAssetTarget(c, 'jpg', this.buildExportTitle());
       let src: Uint8Array;
       let w: number;
       let h: number;
@@ -2140,7 +2254,12 @@ struct Index {
       // 徽章收口先于 HDR 回嵌：mark 剥离 XMP/MPF/ISO 复合容器并移植源图 EXIF，
       // 必须在增益图写入前执行。徽章写入真机实测图库无 LEICA 角标显示（2026-11-04），
       // 暂时禁用：保留 EXIF 迁移与容器剥离，仅停写 EXIF 私有 tag + FFE4 段。
-      const marked = LeicaMark.mark(jpeg, this.srcExifApp1, false);
+      // 「按当下时间」导出：三个时间 tag 重写为导出时刻，其余 EXIF 原样（v1.5.0 移植）。
+      let srcApp1ForExport: Uint8Array | undefined = this.srcExifApp1;
+      if (srcApp1ForExport !== undefined && !SettingsStore.isExportTimeOriginal()) {
+        srcApp1ForExport = ExifTimes.rewriteSegmentTimes(srcApp1ForExport, ExifTimes.formatNow());
+      }
+      const marked = LeicaMark.mark(jpeg, srcApp1ForExport, false);
       const finApp1 = LeicaMark.extractApp1(marked);
       if (finApp1 !== undefined) {
         hilog.info(0x0000, 'RawExif',
@@ -2171,16 +2290,27 @@ struct Index {
         w, h, this.pickedUri !== '' ? 'picked' : 'test');
       await ImagePipeline.writeToGallery(target, finalJpeg);
       this.exportProgress = 100;
-      await ExportNotify.finish(c, true, '已保存到图库');
       exportPm.release().catch(() => {
       });
       exportPm = undefined;
-      this.toast('已保存到图库');
+      if (!batchMode) {
+        await ExportNotify.finish(c, true, '已保存到图库');
+        this.toast('已保存到图库');
+        this.exporting = false;
+      }
+      return true;
     } catch (e) {
       if (exportPm !== undefined) {
         exportPm.release().catch(() => {
         });
         exportPm = undefined;
+      }
+      if (batchMode) {
+        // 取消/失败交批量循环统一收口（回收站清理、停止或跳过）
+        if (e instanceof Error) {
+          throw e;
+        }
+        throw new Error('导出失败');
       }
       if (e instanceof ExportCancelledError) {
         await this.removeCancelledAsset(target);
@@ -2191,8 +2321,110 @@ struct Index {
         await ExportNotify.finish(c, false, '导出失败：' + msg);
         this.toast('导出失败：' + msg);
       }
+      this.exporting = false;
+      return false;
+    }
+  }
+
+  /**
+   * 批量导出（v1.5.0 移植）：配方兜底（未调整图跟随当前配方）→ SaveButton 窗口内
+   * 按环形顺序预建全部相册资产（30 个 createAsset 远小于 1 分钟，写入不受时限）→
+   * 从活动图起逐张导出；通知栏「停止」或单张失败回收未写入资产后收口。
+   */
+  private async doBatchExport(): Promise<void> {
+    if (!this.hasImage || this.exporting || this.processing || this.modelBusy) {
+      return;
+    }
+    const c = this.ctx();
+    if (c === undefined) {
+      return;
+    }
+    // 先冻结活动图状态（capture 配方），再做配方预检：
+    // 用户刚选风格但未切换过图时，配方只存在于活动图上，尚未 capture。
+    this.snapshotActive();
+    if (this.batchRecipe.isEmpty()) {
+      this.toast('请先选择一个色彩再全部导出');
+      return;
+    }
+    // 配方兜底：从未调整过的图跟随配方；单独调过的保留自己的设置（上游语义）
+    const n = this.batchItems.length;
+    for (let i = 0; i < n; i++) {
+      if (!this.batchItems[i].touched) {
+        this.batchItems[i].applyRecipe(this.batchRecipe);
+      }
+    }
+    // 环形计划：从活动图开始
+    const order: number[] = [];
+    for (let i = 0; i < n; i++) {
+      order.push((this.batchIndex + i) % n);
+    }
+    this.exporting = true;
+    this.batchExporting = true;
+    this.exportProgress = 0;
+    this.batchProgressText = `批量导出 0 / ${n}`;
+    await ExportNotify.begin(c);
+    // SaveButton 授权窗口内预建全部资产（title 定各张文件名）
+    const targets: string[] = [];
+    try {
+      for (let k = 0; k < order.length; k++) {
+        const it = this.batchItems[order[k]];
+        targets.push(await ImagePipeline.createAssetTarget(c, 'jpg',
+          `${this.exportStemOf(it.uri)}_LM_${this.timeTag()}`));
+      }
+    } catch (e) {
+      for (let k = 0; k < targets.length; k++) {
+        await this.removeCancelledAsset(targets[k]);
+      }
+      this.exporting = false;
+      this.batchExporting = false;
+      await ExportNotify.finish(c, false, '批量导出失败：创建相册目标失败');
+      this.toast('批量导出失败');
+      return;
+    }
+    let done = 0;
+    let cancelled = false;
+    for (let k = 0; k < order.length; k++) {
+      const idx = order[k];
+      const it = this.batchItems[idx];
+      this.batchProgressText = `批量导出 ${k + 1} / ${order.length}`;
+      try {
+        if (this.batchIndex !== idx) {
+          this.batchIndex = idx;
+          this.batchLabel = `${idx + 1} / ${n}`;
+          await this.loadFromUri(it.uri);
+          this.applySessionState(it);
+        }
+        const ok: boolean = await this.doExport(targets[k], true);
+        if (ok) {
+          done++;
+        } else {
+          await this.removeCancelledAsset(targets[k]);
+        }
+        ExportNotify.progress(Math.round((k + 1) * 100 / order.length),
+          `批量 ${k + 1}/${order.length}`);
+      } catch (e) {
+        if (e instanceof ExportCancelledError) {
+          // 通知栏停止：当前张与剩余未写资产全部回收
+          cancelled = true;
+          for (let r = k; r < order.length; r++) {
+            await this.removeCancelledAsset(targets[r]);
+          }
+          break;
+        } else {
+          // 单张失败：回收该张已建资产，继续下一张
+          await this.removeCancelledAsset(targets[k]);
+        }
+      }
     }
     this.exporting = false;
+    this.batchExporting = false;
+    if (cancelled) {
+      await ExportNotify.finishCancelled(c);
+      this.toast(`批量导出已停止：已完成 ${done} 张`);
+    } else {
+      await ExportNotify.finish(c, true, `批量导出完成：已保存 ${done} 张`);
+      this.toast(`批量导出完成：已保存 ${done} 张`);
+    }
   }
 
   private uniqueName(base: string): string {
@@ -3157,7 +3389,8 @@ struct Index {
                 .height(44)
                 .color('#E8B84B')
               Text(this.modelBusy ? '模型推理中…'
-                : (this.exporting ? `导出中… ${this.exportProgress}%` : '处理中…'))
+                : (this.batchExporting ? this.batchProgressText
+                : (this.exporting ? `导出中… ${this.exportProgress}%` : '处理中…')))
                 .fontSize(12)
                 .fontColor('#CCCCCC')
             }
@@ -3191,6 +3424,45 @@ struct Index {
                     Text(this.selectedKey === '' ? '原图' : (this.findCustomOrDefLabel()))
                       .fontSize(12)
                       .fontColor('#8A8A8A')
+                    if (this.batchCount > 1) {
+                      TouchGlow({
+                        glowCenter: 'rgba(232,184,75,0.18)',
+                        glowEdge: 'rgba(232,184,75,0)',
+                        glowRadiusVp: 60,
+                        cornerRadiusVp: 999,
+                        pressScale: 0.92,
+                        padH: 6,
+                        padV: 4
+                      }) {
+                        Text('‹')
+                          .fontSize(16)
+                          .fontWeight(FontWeight.Bold)
+                          .fontColor('#E8B84B')
+                          .onClick(() => {
+                            this.switchBatch(-1);
+                          })
+                      }
+                      Text(this.batchLabel)
+                        .fontSize(12)
+                        .fontColor('#F2E6C9')
+                      TouchGlow({
+                        glowCenter: 'rgba(232,184,75,0.18)',
+                        glowEdge: 'rgba(232,184,75,0)',
+                        glowRadiusVp: 60,
+                        cornerRadiusVp: 999,
+                        pressScale: 0.92,
+                        padH: 6,
+                        padV: 4
+                      }) {
+                        Text('›')
+                          .fontSize(16)
+                          .fontWeight(FontWeight.Bold)
+                          .fontColor('#E8B84B')
+                          .onClick(() => {
+                            this.switchBatch(1);
+                          })
+                      }
+                    }
                     TouchGlow({
                       glowCenter: 'rgba(232,184,75,0.18)',
                       glowEdge: 'rgba(232,184,75,0)',
@@ -3370,7 +3642,11 @@ struct Index {
                   SaveButton({ icon: SaveIconStyle.FULL_FILLED, text: SaveDescription.SAVE })
                     .onClick(async (_e: ClickEvent, result: SaveButtonOnClickResult) => {
                       if (result === SaveButtonOnClickResult.SUCCESS) {
-                        await this.doExport();
+                        if (this.batchCount > 1) {
+                          await this.doBatchExport();
+                        } else {
+                          await this.doExport();
+                        }
                       } else {
                         this.toast('未获得保存授权');
                       }

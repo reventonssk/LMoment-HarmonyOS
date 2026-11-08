@@ -30,6 +30,7 @@ const KEY_HDR_HINT: string = 'hdr_hint_shown';
 const KEY_HDR_DEFAULT_ON: string = 'hdr_default_on';
 const KEY_INAPP_CAPTURE: string = 'inapp_capture_mode';
 const KEY_IMMERSIVE_LEVEL: string = 'immersive_material_mode';
+const KEY_EXPORT_TIME: string = 'export_time_mode';
 
 export class SettingsStore {
   /** 「记忆上次」在 default_category 里的取值。 */
@@ -333,6 +334,21 @@ export class SettingsStore {
 
   static setInappCaptureMode(mode: string): void {
     SettingsStore.put(KEY_INAPP_CAPTURE, mode === 'off' ? 'off' : 'auto');
+  }
+
+  // ---- 导出时间模式（v1.5.0 移植）----
+
+  /** original = 保留图片原本拍摄时间（默认，EXIF 原样移植）；now = 重写为导出时刻。 */
+  static exportTimeMode(): string {
+    return SettingsStore.str(KEY_EXPORT_TIME, 'original');
+  }
+
+  static isExportTimeOriginal(): boolean {
+    return SettingsStore.exportTimeMode() === 'original';
+  }
+
+  static setExportTimeOriginal(original: boolean): void {
+    SettingsStore.put(KEY_EXPORT_TIME, original ? 'original' : 'now');
   }
 
   // ---- 沉浸光感（对齐 zhihu-plus-plus-HMOS 四挡）----
